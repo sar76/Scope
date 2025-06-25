@@ -1,0 +1,28 @@
+# Computer Vision Pipeline Requirements
+# Python >= 3.10 required
+
+# Web automation and screenshot capture
+selenium>=4.14.0
+webdriver-manager>=3.8.5
+
+# Image processing
+pillow>=10.2.0
+
+# Computer vision and image processing
+opencv-python>=4.8.0
+numpy>=1.24.0
+
+# OCR for text-based refinement (optional)
+pytesseract>=0.3.10
+
+# Machine learning for advanced refinement (optional)
+scikit-learn>=1.6.0
+
+# OpenAI API for vision analysis
+openai>=1.90.0
+
+# HTTP requests
+requests>=2.31.0
+
+# Environment variable management (optional)
+python-dotenv>=1.0.0 
