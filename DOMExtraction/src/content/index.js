@@ -726,6 +726,54 @@ function computeUniqueCssPath(el) {
 }
 
 /**
+ * Add a new function to collect all interactive elements (tree walker + shadow DOM)
+ */
+function collectAllInteractiveElements(root = document) {
+  const results = [];
+  const walker = document.createTreeWalker(
+    root,
+    NodeFilter.SHOW_ELEMENT,
+    {
+      acceptNode: (node) => {
+        const style = window.getComputedStyle(node);
+        const tag = node.tagName?.toLowerCase();
+        const hasCursor = style.cursor === "pointer";
+        const hasClick =
+          typeof node.onclick === "function" || node.getAttribute("onclick");
+        const isNative = ["button", "input", "select", "textarea"].includes(
+          tag
+        );
+        const hasRoleBtn = node.getAttribute("role") === "button";
+        const isLink = tag === "a" && node.hasAttribute("href");
+
+        if (isNative || isLink || hasRoleBtn || hasClick || hasCursor) {
+          return NodeFilter.FILTER_ACCEPT;
+        }
+        return NodeFilter.FILTER_SKIP;
+      },
+    },
+    false
+  );
+
+  let el = walker.nextNode();
+  while (el) {
+    results.push(el);
+    el = walker.nextNode();
+  }
+
+  // Recurse into any shadow roots
+  const all = root.querySelectorAll("*");
+  all.forEach((node) => {
+    if (node.shadowRoot) {
+      results.push(...collectAllInteractiveElements(node.shadowRoot));
+    }
+  });
+
+  // De-duplicate
+  return Array.from(new Set(results));
+}
+
+/**
  * Handle run inspect command
  * @param {Function} sendResponse - Response callback
  */
@@ -745,13 +793,13 @@ const handleRunInspect = withErrorHandling(async (sendResponse) => {
     console.log("Starting DOM observation...");
     observerManager.startObserving();
 
-    console.log("Collecting UI elements (hover-based)...");
+    console.log("Collecting UI elements (tree walker, all at once)...");
     createNotification(
-      "🔍 Collecting UI elements with hover detection...",
+      "🔍 Collecting UI elements (all at once, no scrolling needed)...",
       "info",
       0
     );
-    const elements = await collectInteractiveElementsByHover();
+    const elements = collectAllInteractiveElements();
     console.log(`Collected ${elements.length} interactive elements`);
 
     // Map to data objects with selector, tag, text, etc.

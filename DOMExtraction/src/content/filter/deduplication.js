@@ -5,7 +5,7 @@
 
 import { THRESHOLDS } from "@shared/constants.js";
 import { calculateIoU, calculateArea } from "../visibility/geometry.js";
-import { computeUniqueCssPath } from "../utils/dom.js";
+import { computeUniqueCssPath, cacheSelector } from "../utils/dom.js";
 
 /**
  * Deduplication filter class for removing duplicate elements
@@ -90,11 +90,11 @@ export class DeduplicationFilter {
     for (let i = 0; i < elements.length; i++) {
       let isContained = false;
       const rectA = elements[i].getBoundingClientRect();
-      const selectorA = computeUniqueCssPath(elements[i]);
+      const selectorA = cacheSelector(elements[i]);
 
       for (let j = 0; j < unique.length; j++) {
         const rectB = unique[j].getBoundingClientRect();
-        const selectorB = computeUniqueCssPath(unique[j]);
+        const selectorB = cacheSelector(unique[j]);
 
         // Check if element A is contained in element B
         if (this.isContained(rectA, rectB)) {
@@ -384,11 +384,11 @@ export class DeduplicationFilter {
     for (let i = 0; i < elements.length; i++) {
       let isDuplicate = false;
       const rectA = elements[i].getBoundingClientRect();
-      const selectorA = computeUniqueCssPath(elements[i]);
+      const selectorA = cacheSelector(elements[i]);
 
       for (let j = 0; j < unique.length; j++) {
         const rectB = unique[j].getBoundingClientRect();
-        const selectorB = computeUniqueCssPath(unique[j]);
+        const selectorB = cacheSelector(unique[j]);
         const iou = calculateIoU(rectA, rectB);
 
         if (iou > threshold) {
@@ -440,11 +440,11 @@ export class DeduplicationFilter {
     for (let i = 0; i < elements.length; i++) {
       let isDuplicate = false;
       const textA = elements[i].innerText?.trim().toLowerCase() || "";
-      const selectorA = computeUniqueCssPath(elements[i]);
+      const selectorA = cacheSelector(elements[i]);
 
       for (let j = 0; j < unique.length; j++) {
         const textB = unique[j].innerText?.trim().toLowerCase() || "";
-        const selectorB = computeUniqueCssPath(unique[j]);
+        const selectorB = cacheSelector(unique[j]);
 
         if (textA === textB && textA.length > 0) {
           // Keep the element with better positioning (closer to top-left)

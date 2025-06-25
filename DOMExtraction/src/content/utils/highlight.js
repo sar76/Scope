@@ -31,6 +31,13 @@ export class HighlightManager {
       return null;
     }
 
+    // Always scroll the element into view (centered, smooth)
+    targetElement.scrollIntoView({
+      behavior: "smooth",
+      block: "center",
+      inline: "center",
+    });
+
     const rect = targetElement.getBoundingClientRect();
     const highlight = this.createHighlightOverlay(rect, options);
 

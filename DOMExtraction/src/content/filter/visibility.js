@@ -9,6 +9,7 @@ import {
   isBasicVisible,
   isWithinViewportBounds,
 } from "../visibility/visibility.js";
+import { cacheSelector } from "../utils/dom.js";
 
 /**
  * Visibility filter class for comprehensive visibility analysis
@@ -141,7 +142,7 @@ export class VisibilityFilter {
 
     for (const element of elements) {
       if (!element || !element.getBoundingClientRect) {
-        const selector = this.getSelector(element);
+        const selector = cacheSelector(element);
         removedReasons.set(selector, "Invalid element");
         continue;
       }
@@ -154,7 +155,7 @@ export class VisibilityFilter {
       } else {
         // Determine specific reason for failure
         const reason = this.getVisibilityFailureReason(element, rect);
-        const selector = this.getSelector(element);
+        const selector = cacheSelector(element);
         removedReasons.set(selector, reason);
       }
     }
@@ -163,35 +164,86 @@ export class VisibilityFilter {
   }
 
   /**
-   * Apply comprehensive visibility filtering with reasons
+   * Apply comprehensive visibility filtering with reasons (two-pass: CSS, then occlusion)
    * @param {Array} elements - Array of elements to filter
    * @returns {Object} {survivors: Element[], removedReasons: Map<string, string>}
    */
   applyComprehensiveVisibilityFilteringWithReasons(elements) {
-    const survivors = [];
-    const removedReasons = new Map();
+    // --- Pass 1: Remove elements invisible due to CSS ---
+    const cssSurvivors = [];
+    const cssRemovedReasons = new Map();
 
     for (const element of elements) {
       if (!element || !element.getBoundingClientRect) {
-        const selector = this.getSelector(element);
-        removedReasons.set(selector, "Invalid element");
+        const selector = cacheSelector(element);
+        cssRemovedReasons.set(selector, "Invalid element");
         continue;
       }
-
       const rect = element.getBoundingClientRect();
-      const isVisible = isTrulyVisible({ node: element, boundingRect: rect });
-
+      const isVisible = isBasicVisible({ node: element, boundingRect: rect });
       if (isVisible) {
-        survivors.push(element);
+        cssSurvivors.push(element);
       } else {
         // Determine specific reason for failure
-        const reason = this.getComprehensiveVisibilityFailureReason(
-          element,
-          rect
-        );
-        const selector = this.getSelector(element);
-        removedReasons.set(selector, reason);
+        const reason = this.getVisibilityFailureReason(element, rect);
+        const selector = cacheSelector(element);
+        cssRemovedReasons.set(selector, reason);
       }
+    }
+
+    // --- Pass 2: Occlusion/stacking checks only on CSS-visible elements ---
+    const survivors = [];
+    const removedReasons = new Map(cssRemovedReasons); // Start with CSS removals
+
+    for (const element of cssSurvivors) {
+      const rect = element.getBoundingClientRect();
+      // Only run occlusion/stacking checks (isTrulyVisible minus isBasicVisible)
+      // We'll use isTrulyVisible, but skip isBasicVisible since already passed
+      // So, replicate isTrulyVisible minus the isBasicVisible check
+      // (viewport bounds, occlusion, etc.)
+      // --- Viewport bounds check ---
+      const scrollTop =
+        window.pageYOffset || document.documentElement.scrollTop;
+      const scrollLeft =
+        window.pageXOffset || document.documentElement.scrollLeft;
+      const viewportHeight = window.innerHeight;
+      const viewportWidth = window.innerWidth;
+      if (
+        rect.bottom + scrollTop < 0 ||
+        rect.top + scrollTop > viewportHeight + scrollTop ||
+        rect.right + scrollLeft < 0 ||
+        rect.left + scrollLeft > viewportWidth + scrollLeft
+      ) {
+        removedReasons.set(
+          cacheSelector(element),
+          "off-screen (viewport bounds)"
+        );
+        continue;
+      }
+      // --- Occlusion test (multi-point) ---
+      const { generateTestPoints } = require("../visibility/geometry.js");
+      const testPoints = generateTestPoints(rect);
+      let visiblePoints = 0;
+      for (const point of testPoints) {
+        const elementAtPoint = document.elementFromPoint(point.x, point.y);
+        if (
+          elementAtPoint &&
+          (elementAtPoint === element || element.contains(elementAtPoint))
+        ) {
+          visiblePoints++;
+        }
+      }
+      // Require at least 60% of points to be visible
+      const THRESHOLDS = require("@shared/constants.js").THRESHOLDS;
+      if (visiblePoints / testPoints.length < THRESHOLDS.VISIBILITY_POINTS) {
+        removedReasons.set(
+          cacheSelector(element),
+          `occluded: only ${visiblePoints}/${testPoints.length} points visible`
+        );
+        continue;
+      }
+      // If passed all checks, keep as survivor
+      survivors.push(element);
     }
 
     return { survivors, removedReasons };

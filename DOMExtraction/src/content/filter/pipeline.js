@@ -10,6 +10,7 @@ import { DeduplicationFilter } from "./deduplication.js";
 import { SpatialFilter } from "./spatial.js";
 import { LLMService } from "../services/llm.js";
 import { calculateIoU, calculateArea } from "../visibility/geometry.js";
+import { cacheSelector } from "../utils/dom.js";
 
 /**
  * Filter pipeline class for comprehensive element filtering
@@ -569,9 +570,9 @@ export class FilterPipeline {
       if (isTopLevel) {
         survivors.push(rects[i].element);
       } else {
-        const selector = this.getSelector(rects[i].element);
+        const selector = cacheSelector(rects[i].element);
         const containerSelector = containedBy
-          ? this.getSelector(containedBy)
+          ? cacheSelector(containedBy)
           : "unknown";
         removedReasons.set(
           selector,
@@ -781,7 +782,7 @@ export class FilterPipeline {
         violations.push("no text content");
       }
 
-      const selector = this.getSelector(element);
+      const selector = cacheSelector(element);
       removedReasons.set(selector, `not structural: ${violations.join(", ")}`);
     }
 
@@ -881,9 +882,9 @@ export class FilterPipeline {
       if (!isDuplicate) {
         survivors.push(elements[i]);
       } else {
-        const selector = this.getSelector(elements[i]);
+        const selector = cacheSelector(elements[i]);
         const duplicateSelector = duplicateOf
-          ? this.getSelector(duplicateOf)
+          ? cacheSelector(duplicateOf)
           : "unknown";
         const text =
           elements[i].innerText?.trim().substring(0, 50) || "no text";
@@ -964,9 +965,9 @@ export class FilterPipeline {
       if (!isDuplicate) {
         survivors.push(elements[i]);
       } else {
-        const selector = this.getSelector(elements[i]);
+        const selector = cacheSelector(elements[i]);
         const duplicateSelector = duplicateOf
-          ? this.getSelector(duplicateOf)
+          ? cacheSelector(duplicateOf)
           : "unknown";
         const tag = elements[i].tagName.toLowerCase();
         const role = elements[i].getAttribute("role") || "none";
@@ -1103,7 +1104,7 @@ export class FilterPipeline {
       if (analysis.isFundamental) {
         survivors.push(element);
       } else {
-        const selector = this.getSelector(element);
+        const selector = cacheSelector(element);
         removedReasons.set(selector, analysis.reason);
       }
     }
@@ -1563,6 +1564,23 @@ function showFilterDebugOverlay(
 ) {
   if (!removedElements || removedElements.length === 0) return;
 
+  // Ensure every removed element has a specific reason
+  if (removalReasons) {
+    removedElements.forEach((el) => {
+      const selector =
+        el._scopeCachedSelector ||
+        el.selector ||
+        (el.element && computeUniqueCssPath(el.element)) ||
+        "unknown";
+      if (!removalReasons.has(selector)) {
+        removalReasons.set(
+          selector,
+          `No specific reason recorded (step: ${stepName})`
+        );
+      }
+    });
+  }
+
   // Store step data
   if (stepNumber !== null) {
     debugStepData.set(stepNumber, {
@@ -1837,6 +1855,13 @@ function highlightElementOnPage(elementData) {
   // If we found the element, highlight it
   if (targetElement && targetElement.getBoundingClientRect) {
     try {
+      // Always scroll the element into view (centered, smooth)
+      targetElement.scrollIntoView({
+        behavior: "smooth",
+        block: "center",
+        inline: "center",
+      });
+
       const rect = targetElement.getBoundingClientRect();
 
       // Create highlight box

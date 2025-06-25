@@ -229,3 +229,16 @@ export function isScrollable(element) {
 
   return overflow.includes("auto") || overflow.includes("scroll");
 }
+
+// Utility: Cache selector at removal time for robust debug overlays
+export function cacheSelector(element) {
+  if (!element) return "unknown";
+  if (typeof element._scopeCachedSelector === "string")
+    return element._scopeCachedSelector;
+  let selector = "unknown";
+  try {
+    selector = computeUniqueCssPath(element);
+  } catch {}
+  element._scopeCachedSelector = selector;
+  return selector;
+}
