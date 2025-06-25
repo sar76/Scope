@@ -75,9 +75,72 @@ export class DeduplicationFilter {
   }
 
   /**
+   * Apply containment-based deduplication with reasons
+   * @param {Array} elements - Array of elements to deduplicate
+   * @param {number} threshold - Containment threshold (default: IOU_CONTAINMENT)
+   * @returns {Object} {survivors: Element[], removedReasons: Map<string, string>}
+   */
+  applyContainmentDeduplicationWithReasons(
+    elements,
+    threshold = THRESHOLDS.IOU_CONTAINMENT
+  ) {
+    const unique = [];
+    const removedReasons = new Map();
+
+    for (let i = 0; i < elements.length; i++) {
+      let isContained = false;
+      const rectA = elements[i].getBoundingClientRect();
+      const selectorA = computeUniqueCssPath(elements[i]);
+
+      for (let j = 0; j < unique.length; j++) {
+        const rectB = unique[j].getBoundingClientRect();
+        const selectorB = computeUniqueCssPath(unique[j]);
+
+        // Check if element A is contained in element B
+        if (this.isContained(rectA, rectB)) {
+          const containment = this.calculateContainment(rectA, rectB);
+          if (containment > threshold) {
+            removedReasons.set(
+              selectorA,
+              `contained by ${selectorB} (${(containment * 100).toFixed(
+                1
+              )}% containment)`
+            );
+            isContained = true;
+            break;
+          }
+        }
+
+        // Check if element B is contained in element A
+        if (this.isContained(rectB, rectA)) {
+          const containment = this.calculateContainment(rectB, rectA);
+          if (containment > threshold) {
+            // Replace the smaller element with the larger one
+            removedReasons.set(
+              selectorB,
+              `contained by ${selectorA} (${(containment * 100).toFixed(
+                1
+              )}% containment)`
+            );
+            unique[j] = elements[i];
+            isContained = true;
+            break;
+          }
+        }
+      }
+
+      if (!isContained) {
+        unique.push(elements[i]);
+      }
+    }
+
+    return { survivors: unique, removedReasons };
+  }
+
+  /**
    * Apply containment-based deduplication
    * @param {Array} elements - Array of elements to deduplicate
-   * @param {number} threshold - Containment threshold (default: 0.7)
+   * @param {number} threshold - Containment threshold (default: IOU_CONTAINMENT)
    * @returns {Array} Deduplicated elements
    */
   applyContainmentDeduplication(
@@ -123,9 +186,47 @@ export class DeduplicationFilter {
   }
 
   /**
-   * Apply final deduplication combining multiple strategies
+   * Apply final deduplication with reasons
    * @param {Array} elements - Array of elements to deduplicate
-   * @returns {Array} Final deduplicated elements
+   * @returns {Object} {survivors: Element[], removedReasons: Map<string, string>}
+   */
+  applyFinalDeduplicationWithReasons(elements) {
+    let currentElements = elements;
+    let allRemovedReasons = new Map();
+
+    // Step 1: Light deduplication
+    const { survivors: lightSurvivors, removedReasons: lightReasons } =
+      this.applyLightDeduplicationWithReasons(currentElements);
+    currentElements = lightSurvivors;
+    allRemovedReasons = new Map([...allRemovedReasons, ...lightReasons]);
+
+    // Step 2: IoU-based deduplication
+    const { survivors: iouSurvivors, removedReasons: iouReasons } =
+      this.applyIoUDeduplicationWithReasons(currentElements);
+    currentElements = iouSurvivors;
+    allRemovedReasons = new Map([...allRemovedReasons, ...iouReasons]);
+
+    // Step 3: Containment-based deduplication
+    const {
+      survivors: containmentSurvivors,
+      removedReasons: containmentReasons,
+    } = this.applyContainmentDeduplicationWithReasons(currentElements);
+    currentElements = containmentSurvivors;
+    allRemovedReasons = new Map([...allRemovedReasons, ...containmentReasons]);
+
+    // Step 4: Text-based deduplication
+    const { survivors: textSurvivors, removedReasons: textReasons } =
+      this.applyTextBasedDeduplicationWithReasons(currentElements);
+    currentElements = textSurvivors;
+    allRemovedReasons = new Map([...allRemovedReasons, ...textReasons]);
+
+    return { survivors: currentElements, removedReasons: allRemovedReasons };
+  }
+
+  /**
+   * Apply final deduplication
+   * @param {Array} elements - Array of elements to deduplicate
+   * @returns {Array} Deduplicated elements
    */
   applyFinalDeduplication(elements) {
     // Step 1: Light deduplication
@@ -235,5 +336,148 @@ export class DeduplicationFilter {
    */
   clearCache() {
     this.cache.clear();
+  }
+
+  /**
+   * Apply light deduplication with reasons
+   * @param {Array} elements - Array of elements to deduplicate
+   * @param {number} threshold - Similarity threshold (default: 0.95)
+   * @returns {Object} {survivors: Element[], removedReasons: Map<string, string>}
+   */
+  applyLightDeduplicationWithReasons(
+    elements,
+    threshold = THRESHOLDS.LIGHT_DEDUPE
+  ) {
+    const seen = new Set();
+    const unique = [];
+    const removedReasons = new Map();
+
+    for (const element of elements) {
+      const selector = computeUniqueCssPath(element);
+      if (!seen.has(selector)) {
+        seen.add(selector);
+        unique.push(element);
+      } else {
+        removedReasons.set(
+          selector,
+          `duplicate selector: ${selector.substring(0, 50)}...`
+        );
+      }
+    }
+
+    return { survivors: unique, removedReasons };
+  }
+
+  /**
+   * Apply IoU-based deduplication with reasons
+   * @param {Array} elements - Array of elements to deduplicate
+   * @param {number} threshold - IoU threshold (default: 0.9)
+   * @returns {Object} {survivors: Element[], removedReasons: Map<string, string>}
+   */
+  applyIoUDeduplicationWithReasons(
+    elements,
+    threshold = THRESHOLDS.IOU_DEDUPE
+  ) {
+    const unique = [];
+    const removedReasons = new Map();
+
+    for (let i = 0; i < elements.length; i++) {
+      let isDuplicate = false;
+      const rectA = elements[i].getBoundingClientRect();
+      const selectorA = computeUniqueCssPath(elements[i]);
+
+      for (let j = 0; j < unique.length; j++) {
+        const rectB = unique[j].getBoundingClientRect();
+        const selectorB = computeUniqueCssPath(unique[j]);
+        const iou = calculateIoU(rectA, rectB);
+
+        if (iou > threshold) {
+          // Keep the larger element
+          const areaA = calculateArea(rectA);
+          const areaB = calculateArea(rectB);
+
+          if (areaA > areaB) {
+            // Replace the smaller element
+            removedReasons.set(
+              selectorB,
+              `IoU duplicate (${(iou * 100).toFixed(
+                1
+              )}% overlap) - smaller area`
+            );
+            unique[j] = elements[i];
+          } else {
+            // Current element is smaller
+            removedReasons.set(
+              selectorA,
+              `IoU duplicate (${(iou * 100).toFixed(
+                1
+              )}% overlap) - smaller area`
+            );
+          }
+          isDuplicate = true;
+          break;
+        }
+      }
+
+      if (!isDuplicate) {
+        unique.push(elements[i]);
+      }
+    }
+
+    return { survivors: unique, removedReasons };
+  }
+
+  /**
+   * Apply text-based deduplication with reasons
+   * @param {Array} elements - Array of elements to deduplicate
+   * @param {number} threshold - Text similarity threshold (default: 0.8)
+   * @returns {Object} {survivors: Element[], removedReasons: Map<string, string>}
+   */
+  applyTextBasedDeduplicationWithReasons(elements, threshold = 0.8) {
+    const unique = [];
+    const removedReasons = new Map();
+
+    for (let i = 0; i < elements.length; i++) {
+      let isDuplicate = false;
+      const textA = elements[i].innerText?.trim().toLowerCase() || "";
+      const selectorA = computeUniqueCssPath(elements[i]);
+
+      for (let j = 0; j < unique.length; j++) {
+        const textB = unique[j].innerText?.trim().toLowerCase() || "";
+        const selectorB = computeUniqueCssPath(unique[j]);
+
+        if (textA === textB && textA.length > 0) {
+          // Keep the element with better positioning (closer to top-left)
+          const rectA = elements[i].getBoundingClientRect();
+          const rectB = unique[j].getBoundingClientRect();
+
+          const scoreA = rectA.top + rectA.left;
+          const scoreB = rectB.top + rectB.left;
+
+          if (scoreA < scoreB) {
+            // Replace the element with worse positioning
+            removedReasons.set(
+              selectorB,
+              `text duplicate: "${textA.substring(0, 30)}..." - worse position`
+            );
+            unique[j] = elements[i];
+          } else {
+            // Current element has worse positioning
+            removedReasons.set(
+              selectorA,
+              `text duplicate: "${textA.substring(0, 30)}..." - worse position`
+            );
+          }
+          isDuplicate = true;
+          break;
+        }
+      }
+
+      if (!isDuplicate) {
+        unique.push(elements[i]);
+      }
+    }
+
+    return { survivors: unique, removedReasons };
   }
 }

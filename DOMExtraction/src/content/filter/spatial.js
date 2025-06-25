@@ -202,4 +202,132 @@ export class SpatialFilter {
   clearCache() {
     this.cache.clear();
   }
+
+  /**
+   * Filter elements by viewport bounds with reasons
+   * @param {Array} elements - Array of elements to filter
+   * @returns {Object} {survivors: Element[], removedReasons: Map<string, string>}
+   */
+  filterByViewportBoundsWithReasons(elements) {
+    const survivors = [];
+    const removedReasons = new Map();
+
+    for (const element of elements) {
+      if (!element || !element.getBoundingClientRect) {
+        const selector = this.getSelector(element);
+        removedReasons.set(selector, "Invalid element");
+        continue;
+      }
+
+      const rect = element.getBoundingClientRect();
+      const isInViewport = isWithinViewportBounds(rect);
+
+      if (isInViewport) {
+        survivors.push(element);
+      } else {
+        // Determine specific reason for being out of viewport
+        let reason = "out of viewport";
+        if (rect.right < 0) reason = "left of viewport";
+        else if (rect.left > window.innerWidth) reason = "right of viewport";
+        else if (rect.bottom < 0) reason = "above viewport";
+        else if (rect.top > window.innerHeight) reason = "below viewport";
+
+        const selector = this.getSelector(element);
+        removedReasons.set(selector, reason);
+      }
+    }
+
+    return { survivors, removedReasons };
+  }
+
+  /**
+   * Filter elements by minimum area with reasons
+   * @param {Array} elements - Array of elements to filter
+   * @param {number} minArea - Minimum area in square pixels
+   * @returns {Object} {survivors: Element[], removedReasons: Map<string, string>}
+   */
+  filterByMinimumAreaWithReasons(elements, minArea = 100) {
+    const survivors = [];
+    const removedReasons = new Map();
+
+    for (const element of elements) {
+      if (!element || !element.getBoundingClientRect) {
+        const selector = this.getSelector(element);
+        removedReasons.set(selector, "Invalid element");
+        continue;
+      }
+
+      const rect = element.getBoundingClientRect();
+      const area = calculateArea(rect);
+
+      if (area >= minArea) {
+        survivors.push(element);
+      } else {
+        const selector = this.getSelector(element);
+        removedReasons.set(
+          selector,
+          `area too small: ${Math.round(area)}px² (min: ${minArea}px²)`
+        );
+      }
+    }
+
+    return { survivors, removedReasons };
+  }
+
+  /**
+   * Filter elements by maximum area with reasons
+   * @param {Array} elements - Array of elements to filter
+   * @param {number} maxArea - Maximum area in square pixels
+   * @returns {Object} {survivors: Element[], removedReasons: Map<string, string>}
+   */
+  filterByMaximumAreaWithReasons(elements, maxArea = 100000) {
+    const survivors = [];
+    const removedReasons = new Map();
+
+    for (const element of elements) {
+      if (!element || !element.getBoundingClientRect) {
+        const selector = this.getSelector(element);
+        removedReasons.set(selector, "Invalid element");
+        continue;
+      }
+
+      const rect = element.getBoundingClientRect();
+      const area = calculateArea(rect);
+
+      if (area <= maxArea) {
+        survivors.push(element);
+      } else {
+        const selector = this.getSelector(element);
+        removedReasons.set(
+          selector,
+          `area too large: ${Math.round(area)}px² (max: ${maxArea}px²)`
+        );
+      }
+    }
+
+    return { survivors, removedReasons };
+  }
+
+  /**
+   * Get selector for an element
+   * @param {Element} element - DOM element
+   * @returns {string} CSS selector
+   */
+  getSelector(element) {
+    if (!element) return "unknown";
+    if (element.id) {
+      return `#${CSS.escape(element.id)}`;
+    }
+
+    // Simple selector generation
+    let selector = element.tagName.toLowerCase();
+    if (element.className) {
+      const classes = element.className.split(" ").filter((c) => c.trim());
+      if (classes.length > 0) {
+        selector += "." + classes.map((c) => CSS.escape(c)).join(".");
+      }
+    }
+
+    return selector;
+  }
 }

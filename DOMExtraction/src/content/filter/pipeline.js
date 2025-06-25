@@ -9,6 +9,7 @@ import { VisibilityFilter } from "./visibility.js";
 import { DeduplicationFilter } from "./deduplication.js";
 import { SpatialFilter } from "./spatial.js";
 import { LLMService } from "../services/llm.js";
+import { calculateIoU, calculateArea } from "../visibility/geometry.js";
 
 /**
  * Filter pipeline class for comprehensive element filtering
@@ -29,18 +30,62 @@ export class FilterPipeline {
   async applyBasicFiltering(elements) {
     console.log(`Applying basic filtering to ${elements.length} elements`);
 
+    // Reset debug state at the start
+    clearDebugData();
+
+    // Type guard to ensure we're working with Elements
+    if (elements.length > 0 && !(elements[0] instanceof Element)) {
+      console.error(
+        "applyBasicFiltering expects Element array, got:",
+        elements[0]
+      );
+      return [];
+    }
+
     let filtered = elements;
 
     // Step 1: Visibility filtering
-    filtered = this.visibilityFilter.filter(filtered);
+    const {
+      survivors: visibilitySurvivors,
+      removedReasons: visibilityReasons,
+    } = this.visibilityFilter.filterWithReasons(filtered);
+    showFilterDebugOverlay(
+      "Basic Visibility Filtering",
+      Array.from(visibilityReasons.keys()).map(createRichElementObject),
+      "Visibility failures",
+      1,
+      "Basic visibility filtering",
+      visibilityReasons
+    );
+    filtered = visibilitySurvivors;
     console.log(`After visibility filtering: ${filtered.length} elements`);
 
     // Step 2: Basic deduplication
-    filtered = this.deduplicationFilter.applyLightDeduplication(filtered);
+    const { survivors: dedupeSurvivors, removedReasons: dedupeReasons } =
+      this.deduplicationFilter.applyLightDeduplicationWithReasons(filtered);
+    showFilterDebugOverlay(
+      "Basic Deduplication",
+      Array.from(dedupeReasons.keys()).map(createRichElementObject),
+      "Deduplicated",
+      2,
+      "Basic deduplication",
+      dedupeReasons
+    );
+    filtered = dedupeSurvivors;
     console.log(`After deduplication: ${filtered.length} elements`);
 
     // Step 3: Spatial filtering
-    filtered = this.spatialFilter.filterByViewportBounds(filtered);
+    const { survivors: spatialSurvivors, removedReasons: spatialReasons } =
+      this.spatialFilter.filterByViewportBoundsWithReasons(filtered);
+    showFilterDebugOverlay(
+      "Basic Spatial Filtering",
+      Array.from(spatialReasons.keys()).map(createRichElementObject),
+      "Out of viewport",
+      3,
+      "Basic spatial filtering",
+      spatialReasons
+    );
+    filtered = spatialSurvivors;
     console.log(`After spatial filtering: ${filtered.length} elements`);
 
     return filtered;
@@ -87,8 +132,12 @@ export class FilterPipeline {
       `Applying comprehensive filtering to ${selectors.length} selectors`
     );
 
+    // Reset debug state at the start
+    clearDebugData();
+
     const totalSteps = 25;
     let currentStep = 0;
+    let elements = []; // Declare elements outside try block
 
     const updateProgress = (step, message) => {
       currentStep = step;
@@ -103,7 +152,12 @@ export class FilterPipeline {
     try {
       // Step 1: Convert selectors to elements
       updateProgress(1, "Converting selectors to elements...");
-      let elements = this.convertSelectorsToElements(selectors);
+      let {
+        elements: convertedElements,
+        removedSelectors,
+        removalReasons,
+      } = this.convertSelectorsToElements(selectors);
+      elements = convertedElements; // Assign to outer scope variable
       console.log(`Found ${elements.length} elements from selectors`);
       let prev = elements.slice();
 
@@ -112,17 +166,21 @@ export class FilterPipeline {
         2,
         "Step 1: Top-level filtering with fixpoint iteration..."
       );
-      elements = this.applyTopLevelFiltering(elements);
-      elements = this.ensureMinimumSurvivors(
-        elements,
-        prev,
-        "Top-level filtering"
-      );
+      const beforeTopLevel = elements.slice();
+      const { survivors: topLevelSurvivors, removedReasons: topLevelReasons } =
+        this.applyTopLevelFilteringWithReasons(elements);
+      // Show actual filtering before ensureMinimumSurvivors
       showFilterDebugOverlay(
         "Top-level Filtering",
-        prev.filter((x) => !elements.includes(x)),
+        Array.from(topLevelReasons.keys()).map(createRichElementObject),
         "Not top-level",
-        2,
+        10,
+        "Top-level filtering",
+        topLevelReasons
+      );
+      elements = this.ensureMinimumSurvivors(
+        topLevelSurvivors,
+        prev,
         "Top-level filtering"
       );
       prev = elements.slice();
@@ -130,18 +188,25 @@ export class FilterPipeline {
 
       // Step 3: Visibility filtering
       updateProgress(3, "Step 2: Comprehensive visibility analysis...");
-      elements =
-        this.visibilityFilter.applyComprehensiveVisibilityFiltering(elements);
-      elements = this.ensureMinimumSurvivors(
-        elements,
-        prev,
-        "Visibility filtering"
-      );
+      const {
+        survivors: visibilitySurvivors,
+        removedReasons: visibilityReasons,
+      } =
+        this.visibilityFilter.applyComprehensiveVisibilityFilteringWithReasons(
+          elements
+        );
+      // Show actual filtering before ensureMinimumSurvivors
       showFilterDebugOverlay(
         "Visibility Filtering",
-        prev.filter((x) => !elements.includes(x)),
+        Array.from(visibilityReasons.keys()).map(createRichElementObject),
         "Not visible",
-        3,
+        11,
+        "Visibility filtering",
+        visibilityReasons
+      );
+      elements = this.ensureMinimumSurvivors(
+        visibilitySurvivors,
+        prev,
         "Visibility filtering"
       );
       prev = elements.slice();
@@ -149,20 +214,23 @@ export class FilterPipeline {
 
       // Step 4: IoU-based deduplication
       updateProgress(4, "Step 3: IoU-based deduplication...");
-      elements = this.deduplicationFilter.applyIoUDeduplication(
-        elements,
-        THRESHOLDS.IOU_DEDUPE
-      );
-      elements = this.ensureMinimumSurvivors(
-        elements,
-        prev,
-        "IoU deduplication"
-      );
+      const { survivors: iouSurvivors, removedReasons: iouReasons } =
+        this.deduplicationFilter.applyIoUDeduplicationWithReasons(
+          elements,
+          THRESHOLDS.IOU_DEDUPE
+        );
+      // Show actual filtering before ensureMinimumSurvivors
       showFilterDebugOverlay(
         "IoU Deduplication",
-        prev.filter((x) => !elements.includes(x)),
+        Array.from(iouReasons.keys()).map(createRichElementObject),
         "Deduplicated",
-        4,
+        12,
+        "IoU deduplication",
+        iouReasons
+      );
+      elements = this.ensureMinimumSurvivors(
+        iouSurvivors,
+        prev,
         "IoU deduplication"
       );
       prev = elements.slice();
@@ -170,17 +238,22 @@ export class FilterPipeline {
 
       // Step 5: Structural filtering
       updateProgress(5, "Step 4: Structural element filtering...");
-      elements = this.filterStructuralElements(elements);
-      elements = this.ensureMinimumSurvivors(
-        elements,
-        prev,
-        "Structural filtering"
-      );
+      const {
+        survivors: structuralSurvivors,
+        removedReasons: structuralReasons,
+      } = this.filterStructuralElementsWithReasons(elements);
+      // Show actual filtering before ensureMinimumSurvivors
       showFilterDebugOverlay(
         "Structural Filtering",
-        prev.filter((x) => !elements.includes(x)),
+        Array.from(structuralReasons.keys()).map(createRichElementObject),
         "Not structural/interactive",
-        5,
+        13,
+        "Structural filtering",
+        structuralReasons
+      );
+      elements = this.ensureMinimumSurvivors(
+        structuralSurvivors,
+        prev,
         "Structural filtering"
       );
       prev = elements.slice();
@@ -195,39 +268,45 @@ export class FilterPipeline {
         `After interactive prioritization: ${elements.length} elements`
       );
 
-      // Step 7: Semantic similarity filtering
+      // Step 7: Semantic similarity filtering with reasons
       updateProgress(7, "Step 6: Semantic similarity analysis...");
-      const beforeSemantic = elements.slice();
-      elements = this.applySemanticSimilarityFiltering(elements);
-      elements = this.ensureMinimumSurvivors(
-        elements,
-        beforeSemantic,
-        "Semantic similarity filtering"
-      );
+      const { survivors: semanticSurvivors, removedReasons: semanticReasons } =
+        this.applySemanticSimilarityFilteringWithReasons(elements);
+      // Show actual filtering before ensureMinimumSurvivors
       showFilterDebugOverlay(
         "Semantic Similarity Filtering",
-        beforeSemantic.filter((x) => !elements.includes(x)),
+        Array.from(semanticReasons.keys()).map(createRichElementObject),
         "Semantically similar",
-        7,
+        14,
+        "Semantic similarity filtering",
+        semanticReasons
+      );
+      elements = this.ensureMinimumSurvivors(
+        semanticSurvivors,
+        prev,
         "Semantic similarity filtering"
       );
       prev = elements.slice();
       console.log(`After semantic filtering: ${elements.length} elements`);
 
-      // Step 8: Functional similarity filtering
+      // Step 8: Functional similarity filtering with reasons
       updateProgress(8, "Step 7: Functional similarity analysis...");
-      const beforeFunctional = elements.slice();
-      elements = this.applyFunctionalSimilarityFiltering(elements);
-      elements = this.ensureMinimumSurvivors(
-        elements,
-        beforeFunctional,
-        "Functional similarity filtering"
-      );
+      const {
+        survivors: functionalSurvivors,
+        removedReasons: functionalReasons,
+      } = this.applyFunctionalSimilarityFilteringWithReasons(elements);
+      // Show actual filtering before ensureMinimumSurvivors
       showFilterDebugOverlay(
         "Functional Similarity Filtering",
-        beforeFunctional.filter((x) => !elements.includes(x)),
+        Array.from(functionalReasons.keys()).map(createRichElementObject),
         "Functionally similar",
-        8,
+        15,
+        "Functional similarity filtering",
+        functionalReasons
+      );
+      elements = this.ensureMinimumSurvivors(
+        functionalSurvivors,
+        prev,
         "Functional similarity filtering"
       );
       prev = elements.slice();
@@ -235,37 +314,27 @@ export class FilterPipeline {
 
       // Step 9: LLM-based analysis (batched)
       updateProgress(9, "Step 8: LLM-based element classification...");
-      const beforeLLM = elements.slice();
       elements = await this.applyLLMAnalysis(elements, updateProgress, 10, 20);
-      elements = this.ensureMinimumSurvivors(
-        elements,
-        beforeLLM,
-        "LLM analysis"
-      );
-      showFilterDebugOverlay(
-        "LLM Analysis",
-        beforeLLM.filter((x) => !elements.includes(x)),
-        "LLM filtered",
-        9,
-        "LLM analysis"
-      );
+      // LLM analysis doesn't filter, just analyzes and adds metadata
       prev = elements.slice();
       console.log(`After LLM analysis: ${elements.length} elements`);
 
       // Step 10: Final quality filtering
       updateProgress(21, "Step 9: Final quality assessment...");
-      const beforeFinal = elements.slice();
-      elements = this.applyFinalQualityFiltering(elements);
-      elements = this.ensureMinimumSurvivors(
-        elements,
-        beforeFinal,
-        "Final quality filtering"
-      );
+      const { survivors: finalSurvivors, removedReasons: finalReasons } =
+        this.applyFinalQualityFilteringWithReasons(elements);
+      // Show actual filtering before ensureMinimumSurvivors
       showFilterDebugOverlay(
         "Final Quality Filtering",
-        beforeFinal.filter((x) => !elements.includes(x)),
+        Array.from(finalReasons.keys()).map(createRichElementObject),
         "Not fundamental UI",
-        21,
+        17,
+        "Final quality filtering",
+        finalReasons
+      );
+      elements = this.ensureMinimumSurvivors(
+        finalSurvivors,
+        prev,
         "Final quality filtering"
       );
       prev = elements.slice();
@@ -285,54 +354,98 @@ export class FilterPipeline {
 
       // Step 13: Final deduplication
       updateProgress(24, "Step 12: Final deduplication...");
-      const beforeFinalDedup = elements.slice();
-      elements = this.deduplicationFilter.applyFinalDeduplication(elements);
+      const {
+        survivors: finalDedupSurvivors,
+        removedReasons: finalDedupReasons,
+      } = this.deduplicationFilter.applyFinalDeduplicationWithReasons(elements);
       showFilterDebugOverlay(
         "Final Deduplication",
-        beforeFinalDedup.filter((x) => !elements.includes(x)),
+        Array.from(finalDedupReasons.keys()).map(createRichElementObject),
         "Deduplicated",
-        24,
-        "Final deduplication"
+        18,
+        "Final deduplication",
+        finalDedupReasons
       );
+      elements = finalDedupSurvivors;
       prev = elements.slice();
       console.log(`After final deduplication: ${elements.length} elements`);
 
-      // Step 14: Complete
-      updateProgress(25, "Comprehensive filtering complete!");
-      console.log(
-        `Comprehensive filtering complete: ${elements.length} elements`
-      );
+      // Step 14: Final validation and cleanup
+      updateProgress(25, "Step 13: Final validation...");
 
-      return elements;
+      // Final validation - ensure all elements are still valid
+      const finalElements = elements.filter((element) => {
+        try {
+          if (!element || !element.getBoundingClientRect) {
+            return false;
+          }
+          const rect = element.getBoundingClientRect();
+          return rect && rect.width !== undefined && rect.height !== undefined;
+        } catch (error) {
+          console.warn("Final validation: Element no longer valid:", element);
+          return false;
+        }
+      });
+
+      console.log(`Final validation: ${finalElements.length} valid elements`);
+      return finalElements;
     } catch (error) {
-      console.error("Error during comprehensive filtering:", error);
-      updateProgress(totalSteps, "Error during filtering");
+      console.error("Comprehensive filtering failed:", error);
+
+      // If we have any elements at all, return them as a fallback
+      if (elements && elements.length > 0) {
+        console.warn("Returning available elements as fallback");
+        return elements.filter((element) => {
+          try {
+            return element && element.getBoundingClientRect;
+          } catch {
+            return false;
+          }
+        });
+      }
+
       throw error;
     }
   }
 
   /**
-   * Convert selectors to DOM elements with better error handling
-   * @param {Array} selectors - Array of CSS selectors
-   * @returns {Array} Array of DOM elements
+   * Convert selectors to elements, keeping selectors immutable
+   * @param {Array} selectors - Array of selector strings
+   * @returns {Object} {elements: Element[], removedSelectors: string[], removalReasons: Map<string, string>}
    */
   convertSelectorsToElements(selectors) {
     const elements = [];
-    const failedSelectors = [];
+    const removedSelectors = [];
+    const removalReasons = new Map();
 
     console.log(`Converting ${selectors.length} selectors to elements...`);
+    console.log("Sample selectors:", selectors.slice(0, 5));
 
     for (const selector of selectors) {
+      // Type guard to ensure we're working with strings
+      if (typeof selector !== "string") {
+        console.error("Expected selector string, got", selector);
+        removedSelectors.push(selector);
+        removalReasons.set(selector, "Invalid selector type");
+        continue;
+      }
+
       try {
+        console.log(`Trying to find element with selector: "${selector}"`);
         const element = document.querySelector(selector);
         if (element) {
+          console.log(`✓ Found element: ${element.tagName}`, element);
           elements.push(element);
         } else {
-          failedSelectors.push(selector);
+          console.log(`✗ Selector not found: "${selector}"`);
+          removedSelectors.push(selector);
+          removalReasons.set(selector, "Element not found in DOM");
           console.warn(`Selector not found: ${selector}`);
         }
       } catch (error) {
-        failedSelectors.push(selector);
+        console.log(`✗ Invalid selector: "${selector}" - ${error.message}`);
+        removedSelectors.push(selector);
+        removalReasons.set(selector, `Invalid selector: ${error.message}`);
         console.warn(`Invalid selector: ${selector}`, error);
       }
     }
@@ -340,49 +453,155 @@ export class FilterPipeline {
     console.log(
       `Successfully converted ${elements.length}/${selectors.length} selectors`
     );
-    if (failedSelectors.length > 0) {
-      console.warn(`Failed selectors:`, failedSelectors);
+    if (removedSelectors.length > 0) {
+      console.warn(`Failed selectors:`, removedSelectors);
+      // Create mock element objects for failed selectors
+      const failedElementObjects = removedSelectors.map((selector) => ({
+        selector: selector,
+        tagName: "unknown",
+        className: "",
+        id: "",
+        role: "",
+        ariaLabel: "",
+        innerText: "",
+        rect: { width: 0, height: 0, top: 0, left: 0 },
+        isRemoved: true,
+        removalReason: removalReasons.get(selector) || "Unknown error",
+      }));
+
       // Show debug overlay for failed selectors
       showFilterDebugOverlay(
         "Selector Conversion",
-        failedSelectors.map((s) => ({ selector: s, tagName: "unknown" })),
+        failedElementObjects,
         "Invalid or not found",
-        null,
-        "Selector conversion"
+        10,
+        "Selector conversion",
+        removalReasons
       );
     }
 
-    return elements;
+    return { elements, removedSelectors, removalReasons };
   }
 
   /**
-   * Apply top-level filtering with fixpoint iteration
+   * Apply top-level filtering with reasons
    * @param {Array} elements - Array of elements
-   * @returns {Array} Filtered elements
+   * @returns {Object} {survivors: Element[], removedReasons: Map<string, string>}
    */
-  applyTopLevelFiltering(elements) {
-    let current = elements;
-    let previous = null;
-    let iterations = 0;
-    const maxIterations = 5;
-
-    while (current.length !== previous?.length && iterations < maxIterations) {
-      previous = current;
-      current = this.spatialFilter.filterTopLevelElements(current);
-      iterations++;
+  applyTopLevelFilteringWithReasons(elements) {
+    // Type guard to ensure we're working with Elements
+    if (elements.length > 0 && !(elements[0] instanceof Element)) {
+      console.error(
+        "applyTopLevelFilteringWithReasons expects Element array, got:",
+        elements[0]
+      );
+      return { survivors: [], removedReasons: new Map() };
     }
 
-    return current;
+    const survivors = [];
+    const removedReasons = new Map();
+
+    // Filter out elements that are no longer in the DOM
+    const validElements = elements.filter((element) => {
+      try {
+        // Check if element is still in the DOM
+        if (!element || !element.getBoundingClientRect) {
+          return false;
+        }
+        const rect = element.getBoundingClientRect();
+        // Check if rect is valid and has dimensions
+        return rect && rect.width !== undefined && rect.height !== undefined;
+      } catch (error) {
+        console.warn("Element no longer in DOM:", element);
+        return false;
+      }
+    });
+
+    if (validElements.length === 0) {
+      console.warn("No valid elements found for top-level filtering");
+      return { survivors: [], removedReasons: new Map() };
+    }
+
+    const rects = validElements
+      .map((element) => {
+        try {
+          return {
+            element,
+            rect: element.getBoundingClientRect(),
+          };
+        } catch (error) {
+          console.warn(
+            "Error getting bounding rect for element:",
+            element,
+            error
+          );
+          return null;
+        }
+      })
+      .filter(Boolean); // Remove null entries
+
+    for (let i = 0; i < rects.length; i++) {
+      let isTopLevel = true;
+      let containedBy = null;
+
+      for (let j = 0; j < rects.length; j++) {
+        if (i === j) continue;
+
+        try {
+          const iou = calculateIoU(rects[i].rect, rects[j].rect);
+          if (iou > THRESHOLDS.IOU_CONTAINMENT) {
+            // Check if element i is contained within element j
+            const areaI = calculateArea(rects[i].rect);
+            const areaJ = calculateArea(rects[j].rect);
+
+            if (areaI < areaJ) {
+              isTopLevel = false;
+              containedBy = rects[j].element;
+              break;
+            }
+          }
+        } catch (error) {
+          console.warn("Error calculating IoU or area:", error);
+          continue;
+        }
+      }
+
+      if (isTopLevel) {
+        survivors.push(rects[i].element);
+      } else {
+        const selector = this.getSelector(rects[i].element);
+        const containerSelector = containedBy
+          ? this.getSelector(containedBy)
+          : "unknown";
+        removedReasons.set(
+          selector,
+          `contained by larger element: ${containerSelector}`
+        );
+      }
+    }
+
+    return { survivors, removedReasons };
   }
 
   /**
-   * Filter structural elements - much less restrictive
+   * Filter structural elements with reasons
    * @param {Array} elements - Array of elements
-   * @returns {Array} Filtered elements
+   * @returns {Object} {survivors: Element[], removedReasons: Map<string, string>}
    */
-  filterStructuralElements(elements) {
-    const beforeCount = elements.length;
-    const filtered = elements.filter((element) => {
+  filterStructuralElementsWithReasons(elements) {
+    // Type guard to ensure we're working with Elements
+    if (elements.length > 0 && !(elements[0] instanceof Element)) {
+      console.error(
+        "filterStructuralElementsWithReasons expects Element array, got:",
+        elements[0]
+      );
+      return { survivors: [], removedReasons: new Map() };
+    }
+
+    const survivors = [];
+    const removedReasons = new Map();
+
+    for (const element of elements) {
       const tag = element.tagName.toLowerCase();
       const role = element.getAttribute("role");
       const className = element.className || "";
@@ -390,7 +609,8 @@ export class FilterPipeline {
 
       // Keep interactive elements
       if (this.isInteractiveElement(element)) {
-        return true;
+        survivors.push(element);
+        continue;
       }
 
       // Keep structural elements
@@ -405,7 +625,8 @@ export class FilterPipeline {
           "aside",
         ].includes(tag)
       ) {
-        return true;
+        survivors.push(element);
+        continue;
       }
 
       // Keep elements with meaningful roles
@@ -421,14 +642,16 @@ export class FilterPipeline {
           "tab",
         ].includes(role)
       ) {
-        return true;
+        survivors.push(element);
+        continue;
       }
 
       // Keep divs and spans that have UI-like attributes
       if (tag === "div" || tag === "span") {
         // Keep if it has data attributes (common in modern frameworks)
         if (element.hasAttribute("data-")) {
-          return true;
+          survivors.push(element);
+          continue;
         }
         // Keep if it has common UI class patterns
         if (
@@ -443,7 +666,8 @@ export class FilterPipeline {
           className.includes("dropdown") ||
           className.includes("tab")
         ) {
-          return true;
+          survivors.push(element);
+          continue;
         }
         // Keep if it has meaningful ID
         if (
@@ -454,46 +678,150 @@ export class FilterPipeline {
             id.includes("header") ||
             id.includes("footer"))
         ) {
-          return true;
+          survivors.push(element);
+          continue;
         }
         // Keep if it has click handlers or event listeners
         if (element.onclick || element.getAttribute("onclick")) {
-          return true;
+          survivors.push(element);
+          continue;
         }
         // Keep if it has cursor pointer
         const style = window.getComputedStyle(element);
         if (style.cursor === "pointer") {
-          return true;
+          survivors.push(element);
+          continue;
         }
       }
 
       // Keep form elements
       if (["form", "fieldset", "legend", "optgroup", "option"].includes(tag)) {
-        return true;
+        survivors.push(element);
+        continue;
       }
 
       // Keep elements with text content (likely meaningful)
       if (element.innerText && element.innerText.trim().length > 0) {
-        return true;
+        survivors.push(element);
+        continue;
       }
 
-      return false;
-    });
+      // If we get here, the element is not structural
+      const violations = [];
 
-    const afterCount = filtered.length;
+      if (!this.isInteractiveElement(element)) {
+        violations.push("not interactive");
+      }
+
+      if (
+        ![
+          "nav",
+          "header",
+          "footer",
+          "main",
+          "section",
+          "article",
+          "aside",
+        ].includes(tag)
+      ) {
+        violations.push(`not structural tag (${tag})`);
+      }
+
+      if (
+        !role ||
+        ![
+          "navigation",
+          "banner",
+          "contentinfo",
+          "main",
+          "search",
+          "menuitem",
+          "tab",
+        ].includes(role)
+      ) {
+        violations.push(`no meaningful role (${role || "none"})`);
+      }
+
+      if (tag === "div" || tag === "span") {
+        if (!element.hasAttribute("data-"))
+          violations.push("no data attributes");
+        if (
+          !className.includes("btn") &&
+          !className.includes("button") &&
+          !className.includes("nav") &&
+          !className.includes("menu") &&
+          !className.includes("header") &&
+          !className.includes("footer") &&
+          !className.includes("sidebar") &&
+          !className.includes("modal") &&
+          !className.includes("dropdown") &&
+          !className.includes("tab")
+        )
+          violations.push("no UI class patterns");
+        if (
+          !id ||
+          (!id.includes("btn") &&
+            !id.includes("nav") &&
+            !id.includes("menu") &&
+            !id.includes("header") &&
+            !id.includes("footer"))
+        )
+          violations.push("no meaningful ID");
+        if (!element.onclick && !element.getAttribute("onclick"))
+          violations.push("no click handlers");
+        const style = window.getComputedStyle(element);
+        if (style.cursor !== "pointer") violations.push("no pointer cursor");
+      }
+
+      if (!["form", "fieldset", "legend", "optgroup", "option"].includes(tag)) {
+        violations.push("not form element");
+      }
+
+      if (!element.innerText || element.innerText.trim().length === 0) {
+        violations.push("no text content");
+      }
+
+      const selector = this.getSelector(element);
+      removedReasons.set(selector, `not structural: ${violations.join(", ")}`);
+    }
+
     console.log(
-      `Structural filtering: ${beforeCount} → ${afterCount} elements`
+      `Structural filtering: ${elements.length} → ${survivors.length} elements`
     );
 
     // Ensure we keep at least some elements
-    if (afterCount === 0 && beforeCount > 0) {
+    if (survivors.length === 0 && elements.length > 0) {
       console.warn(
         "Structural filtering removed all elements, keeping first 3"
       );
-      return elements.slice(0, Math.min(3, elements.length));
+      const fallbackElements = elements.slice(0, Math.min(3, elements.length));
+      return { survivors: fallbackElements, removedReasons: new Map() };
     }
 
-    return filtered;
+    return { survivors, removedReasons };
+  }
+
+  /**
+   * Get selector for an element
+   * @param {Element} element - DOM element
+   * @returns {string} CSS selector
+   */
+  getSelector(element) {
+    if (!element) return "unknown";
+    if (element.id) {
+      return `#${CSS.escape(element.id)}`;
+    }
+
+    // Simple selector generation
+    let selector = element.tagName.toLowerCase();
+    if (element.className) {
+      const classes = element.className.split(" ").filter((c) => c.trim());
+      if (classes.length > 0) {
+        selector += "." + classes.map((c) => CSS.escape(c)).join(".");
+      }
+    }
+
+    return selector;
   }
 
   /**
@@ -514,6 +842,59 @@ export class FilterPipeline {
     }
 
     return [...interactive, ...nonInteractive];
+  }
+
+  /**
+   * Apply semantic similarity filtering with reasons
+   * @param {Array} elements - Array of elements
+   * @returns {Object} {survivors: Element[], removedReasons: Map<string, string>}
+   */
+  applySemanticSimilarityFilteringWithReasons(elements) {
+    // Type guard to ensure we're working with Elements
+    if (elements.length > 0 && !(elements[0] instanceof Element)) {
+      console.error(
+        "applySemanticSimilarityFilteringWithReasons expects Element array, got:",
+        elements[0]
+      );
+      return { survivors: [], removedReasons: new Map() };
+    }
+
+    const survivors = [];
+    const removedReasons = new Map();
+
+    for (let i = 0; i < elements.length; i++) {
+      let isDuplicate = false;
+      let duplicateOf = null;
+
+      for (let j = 0; j < survivors.length; j++) {
+        const similarity = this.calculateSemanticSimilarity(
+          elements[i],
+          survivors[j]
+        );
+        if (similarity > THRESHOLDS.SEMANTIC_SIMILARITY) {
+          isDuplicate = true;
+          duplicateOf = survivors[j];
+          break;
+        }
+      }
+
+      if (!isDuplicate) {
+        survivors.push(elements[i]);
+      } else {
+        const selector = this.getSelector(elements[i]);
+        const duplicateSelector = duplicateOf
+          ? this.getSelector(duplicateOf)
+          : "unknown";
+        const text =
+          elements[i].innerText?.trim().substring(0, 50) || "no text";
+        removedReasons.set(
+          selector,
+          `semantically similar to ${duplicateSelector} (text: "${text}...")`
+        );
+      }
+    }
+
+    return { survivors, removedReasons };
   }
 
   /**
@@ -544,6 +925,59 @@ export class FilterPipeline {
     }
 
     return filtered;
+  }
+
+  /**
+   * Apply functional similarity filtering with reasons
+   * @param {Array} elements - Array of elements
+   * @returns {Object} {survivors: Element[], removedReasons: Map<string, string>}
+   */
+  applyFunctionalSimilarityFilteringWithReasons(elements) {
+    // Type guard to ensure we're working with Elements
+    if (elements.length > 0 && !(elements[0] instanceof Element)) {
+      console.error(
+        "applyFunctionalSimilarityFilteringWithReasons expects Element array, got:",
+        elements[0]
+      );
+      return { survivors: [], removedReasons: new Map() };
+    }
+
+    const survivors = [];
+    const removedReasons = new Map();
+
+    for (let i = 0; i < elements.length; i++) {
+      let isDuplicate = false;
+      let duplicateOf = null;
+
+      for (let j = 0; j < survivors.length; j++) {
+        const similarity = this.calculateFunctionalSimilarity(
+          elements[i],
+          survivors[j]
+        );
+        if (similarity > THRESHOLDS.FUNCTIONAL_SIMILARITY) {
+          isDuplicate = true;
+          duplicateOf = survivors[j];
+          break;
+        }
+      }
+
+      if (!isDuplicate) {
+        survivors.push(elements[i]);
+      } else {
+        const selector = this.getSelector(elements[i]);
+        const duplicateSelector = duplicateOf
+          ? this.getSelector(duplicateOf)
+          : "unknown";
+        const tag = elements[i].tagName.toLowerCase();
+        const role = elements[i].getAttribute("role") || "none";
+        removedReasons.set(
+          selector,
+          `functionally similar to ${duplicateSelector} (tag: ${tag}, role: ${role})`
+        );
+      }
+    }
+
+    return { survivors, removedReasons };
   }
 
   /**
@@ -585,6 +1019,15 @@ export class FilterPipeline {
    * @returns {Promise<Array>} Promise that resolves with analyzed elements
    */
   async applyLLMAnalysis(elements, updateProgress, startStep, endStep) {
+    // Type guard to ensure we're working with Elements
+    if (elements.length > 0 && !(elements[0] instanceof Element)) {
+      console.error(
+        "applyLLMAnalysis expects Element array, got:",
+        elements[0]
+      );
+      return [];
+    }
+
     const batchSize = 5;
     const batches = Math.ceil(elements.length / batchSize);
     const stepIncrement = (endStep - startStep) / batches;
@@ -636,15 +1079,73 @@ export class FilterPipeline {
   }
 
   /**
+   * Apply final quality filtering with reasons
+   * @param {Array} elements - Array of elements
+   * @returns {Object} {survivors: Element[], removedReasons: Map<string, string>}
+   */
+  applyFinalQualityFilteringWithReasons(elements) {
+    // Type guard to ensure we're working with Elements
+    if (elements.length > 0 && !(elements[0] instanceof Element)) {
+      console.error(
+        "applyFinalQualityFilteringWithReasons expects Element array, got:",
+        elements[0]
+      );
+      return { survivors: [], removedReasons: new Map() };
+    }
+
+    const survivors = [];
+    const removedReasons = new Map();
+
+    for (const element of elements) {
+      // Check if element is fundamental UI component
+      const analysis = this.isFundamentalUIComponent(element);
+
+      if (analysis.isFundamental) {
+        survivors.push(element);
+      } else {
+        const selector = this.getSelector(element);
+        removedReasons.set(selector, analysis.reason);
+      }
+    }
+
+    return { survivors, removedReasons };
+  }
+
+  /**
    * Apply final quality filtering
    * @param {Array} elements - Array of elements
    * @returns {Array} Filtered elements
    */
   applyFinalQualityFiltering(elements) {
-    return elements.filter((element) => {
+    const originalCount = elements.length;
+    const removedElements = [];
+    const removalReasons = new Map(); // element -> reason
+
+    const filteredElements = elements.filter((element) => {
       // Check if element is fundamental UI component
-      return this.isFundamentalUIComponent(element);
+      const analysis = this.isFundamentalUIComponent(element);
+
+      if (!analysis.isFundamental) {
+        removedElements.push(element);
+        removalReasons.set(element, analysis.reason);
+      }
+
+      return analysis.isFundamental;
     });
+
+    // Show debug overlay for removed elements
+    if (removedElements.length > 0) {
+      showFilterDebugOverlay(
+        "Final Quality Filtering",
+        removedElements,
+        "Element not considered fundamental UI component",
+        17, // Step 17 for final quality filtering
+        "applyFinalQualityFiltering",
+        removalReasons // Pass specific reasons
+      );
+    }
+
+    return filteredElements;
   }
 
   /**
@@ -679,8 +1180,27 @@ export class FilterPipeline {
       }
 
       // Then by area (larger elements first)
-      const aArea = a.rect.width * a.rect.height;
-      const bArea = b.rect.width * b.rect.height;
+      let aArea = 0;
+      let bArea = 0;
+
+      try {
+        // Check if elements have rect property (from previous processing)
+        if (a.rect && b.rect) {
+          aArea = a.rect.width * a.rect.height;
+          bArea = b.rect.width * b.rect.height;
+        } else {
+          // Fallback to getBoundingClientRect
+          const aRect = a.getBoundingClientRect();
+          const bRect = b.getBoundingClientRect();
+          aArea = aRect.width * aRect.height;
+          bArea = bRect.width * bRect.height;
+        }
+      } catch (error) {
+        console.warn("Error calculating area for sorting:", error);
+        // If we can't calculate area, keep original order
+        return 0;
+      }
+
       return bArea - aArea;
     });
   }
@@ -792,37 +1312,206 @@ export class FilterPipeline {
   /**
    * Check if element is a fundamental UI component
    * @param {Element} element - DOM element
-   * @returns {boolean} True if element is fundamental
+   * @returns {Object} {isFundamental: boolean, reason: string} - Analysis result
    */
   isFundamentalUIComponent(element) {
+    // Check if element is still valid
+    if (!element || !element.getBoundingClientRect) {
+      return { isFundamental: false, reason: "Element no longer in DOM" };
+    }
+
     const tag = element.tagName.toLowerCase();
     const role = element.getAttribute("role");
     const text = element.innerText?.trim() || "";
 
+    let rect;
+    let area = 0;
+    try {
+      rect = element.getBoundingClientRect();
+      area = rect.width * rect.height;
+    } catch (error) {
+      console.warn("Error getting bounding rect for element:", element, error);
+      return { isFundamental: false, reason: "Cannot get element dimensions" };
+    }
+
     // Interactive elements are fundamental
     if (this.isInteractiveElement(element)) {
-      return true;
+      return { isFundamental: true, reason: "Interactive element" };
     }
 
-    // Elements with meaningful text are fundamental
-    if (text.length > 0 && text.length < 100) {
-      return true;
+    // Elements with meaningful text are fundamental (removed upper bound)
+    if (text.length > 0) {
+      return {
+        isFundamental: true,
+        reason: `Has text content (${text.length} chars)`,
+      };
     }
 
-    // Structural elements are fundamental
-    if (["nav", "header", "footer", "main"].includes(tag)) {
-      return true;
+    // Expanded structural elements are fundamental
+    const structuralTags = [
+      "nav",
+      "header",
+      "footer",
+      "main",
+      "section",
+      "article",
+      "aside",
+    ];
+    if (structuralTags.includes(tag)) {
+      return { isFundamental: true, reason: `Structural tag: ${tag}` };
     }
 
-    // Elements with meaningful roles are fundamental
+    // Expanded meaningful roles are fundamental
+    const landmarkRoles = [
+      "navigation",
+      "banner",
+      "contentinfo",
+      "main",
+      "region",
+      "complementary",
+      "search",
+      "form",
+      "application",
+      "document",
+      "content",
+      "note",
+      "log",
+      "marquee",
+      "status",
+      "timer",
+      "toolbar",
+    ];
+    if (role && landmarkRoles.includes(role)) {
+      return { isFundamental: true, reason: `Landmark role: ${role}` };
+    }
+
+    // Large containers with significant area are fundamental
+    if (area > 50000) {
+      // 50,000 px² threshold
+      return {
+        isFundamental: true,
+        reason: `Large area: ${Math.round(area)}px²`,
+      };
+    }
+
+    // Elements with many visible child elements are fundamental
+    let visibleChildren = [];
+    try {
+      visibleChildren = Array.from(element.children).filter((child) => {
+        try {
+          const childRect = child.getBoundingClientRect();
+          const style = window.getComputedStyle(child);
+          return (
+            childRect.width > 0 &&
+            childRect.height > 0 &&
+            style.display !== "none" &&
+            style.visibility !== "hidden"
+          );
+        } catch (error) {
+          return false;
+        }
+      });
+    } catch (error) {
+      console.warn("Error checking visible children:", error);
+      visibleChildren = [];
+    }
+
+    if (visibleChildren.length >= 5) {
+      // 5+ visible children threshold
+      return {
+        isFundamental: true,
+        reason: `Many visible children: ${visibleChildren.length}`,
+      };
+    }
+
+    // Elements with ARIA landmarks or regions
     if (
-      role &&
-      ["navigation", "banner", "contentinfo", "main"].includes(role)
+      element.hasAttribute("aria-label") ||
+      element.hasAttribute("aria-labelledby") ||
+      element.hasAttribute("aria-describedby")
     ) {
-      return true;
+      return { isFundamental: true, reason: "Has ARIA attributes" };
     }
 
-    return false;
+    // Form containers and form-related elements
+    if (tag === "form" || element.closest("form")) {
+      return { isFundamental: true, reason: "Form-related element" };
+    }
+
+    // Elements with data attributes (common in modern frameworks)
+    if (element.hasAttribute("data-")) {
+      return { isFundamental: true, reason: "Has data attributes" };
+    }
+
+    // Elements with meaningful IDs
+    const id = element.id || "";
+    if (
+      id &&
+      (id.includes("main") ||
+        id.includes("content") ||
+        id.includes("container") ||
+        id.includes("wrapper") ||
+        id.includes("section") ||
+        id.includes("panel"))
+    ) {
+      return { isFundamental: true, reason: `Meaningful ID: ${id}` };
+    }
+
+    // If we get here, the element is not fundamental
+    const violations = [];
+
+    if (text.length === 0) {
+      violations.push("no text content");
+    }
+
+    if (!structuralTags.includes(tag)) {
+      violations.push(`not a structural tag (${tag})`);
+    }
+
+    if (!role || !landmarkRoles.includes(role)) {
+      violations.push(`no landmark role (${role || "none"})`);
+    }
+
+    if (area <= 50000) {
+      violations.push(`small area: ${Math.round(area)}px²`);
+    }
+
+    if (visibleChildren.length < 5) {
+      violations.push(`few visible children: ${visibleChildren.length}`);
+    }
+
+    if (
+      !element.hasAttribute("aria-label") &&
+      !element.hasAttribute("aria-labelledby") &&
+      !element.hasAttribute("aria-describedby")
+    ) {
+      violations.push("no ARIA attributes");
+    }
+
+    if (tag !== "form" && !element.closest("form")) {
+      violations.push("not form-related");
+    }
+
+    if (!element.hasAttribute("data-")) {
+      violations.push("no data attributes");
+    }
+
+    if (
+      !id ||
+      (!id.includes("main") &&
+        !id.includes("content") &&
+        !id.includes("container") &&
+        !id.includes("wrapper") &&
+        !id.includes("section") &&
+        !id.includes("panel"))
+    ) {
+      violations.push("no meaningful ID");
+    }
+
+    return {
+      isFundamental: false,
+      reason: `not fundamental: ${violations.join(", ")}`,
+    };
   }
 
   /**
@@ -858,27 +1547,43 @@ export class FilterPipeline {
   }
 }
 
-// Debug overlay for filtering steps
+// Global tracking for debug overlay
+let debugStepData = new Map(); // stepNumber -> { stepName, reason, functionName, elements: [] }
+let debugOverlay = null;
+let highlightOverlay = null; // New: overlay for highlighting elements on hover
+
+// Debug overlay for filtering steps - more efficient approach
 function showFilterDebugOverlay(
   stepName,
   removedElements,
   reason,
   stepNumber = null,
-  functionName = null
+  functionName = null,
+  removalReasons = null // New parameter for specific reasons
 ) {
   if (!removedElements || removedElements.length === 0) return;
 
-  // Create or reuse the debug overlay
-  let overlay = document.getElementById("scope-filter-debug-overlay");
-  if (!overlay) {
-    overlay = document.createElement("div");
-    overlay.id = "scope-filter-debug-overlay";
-    overlay.style.cssText = `
+  // Store step data
+  if (stepNumber !== null) {
+    debugStepData.set(stepNumber, {
+      stepName,
+      reason,
+      functionName,
+      elements: removedElements.map(createRichElementObject),
+      removalReasons: removalReasons, // Store specific reasons
+    });
+  }
+
+  // Create or update the debug overlay
+  if (!debugOverlay) {
+    debugOverlay = document.createElement("div");
+    debugOverlay.id = "scope-filter-debug-overlay";
+    debugOverlay.style.cssText = `
       position: fixed;
       top: 20px;
       left: 20px;
-      width: 480px;
-      max-height: 70vh;
+      width: 600px;
+      max-height: 80vh;
       overflow-y: auto;
       background: #222;
       color: #fff;
@@ -890,162 +1595,439 @@ function showFilterDebugOverlay(
       padding: 18px 18px 12px 18px;
       font-size: 13px;
     `;
-    document.body.appendChild(overlay);
+    document.body.appendChild(debugOverlay);
   }
 
-  // Add a section for this step
-  const section = document.createElement("div");
-  section.style.marginBottom = "18px";
-  section.style.borderBottom = "1px solid #444";
-  section.style.paddingBottom = "12px";
-
-  // Create header with step number and function name
-  const header = document.createElement("div");
-  header.style.cssText =
-    "font-weight: bold; color: #ffc107; margin-bottom: 8px;";
-
-  let headerText = stepName;
-  if (stepNumber !== null) {
-    headerText = `Step ${stepNumber}: ${headerText}`;
-  }
-  if (functionName) {
-    headerText += ` (${functionName})`;
-  }
-  headerText += ` - Removed ${removedElements.length} elements`;
-
-  header.textContent = headerText;
-  section.appendChild(header);
-
-  // Add reason description
-  if (reason) {
-    const reasonDiv = document.createElement("div");
-    reasonDiv.style.cssText =
-      "color: #aaa; font-size: 12px; margin-bottom: 8px; font-style: italic;";
-    reasonDiv.textContent = `Reason: ${reason}`;
-    section.appendChild(reasonDiv);
+  // Create highlight overlay for hover effects
+  if (!highlightOverlay) {
+    highlightOverlay = document.createElement("div");
+    highlightOverlay.id = "scope-highlight-overlay";
+    highlightOverlay.style.cssText = `
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      pointer-events: none;
+      z-index: 999998;
+    `;
+    document.body.appendChild(highlightOverlay);
   }
 
-  // Create list of removed elements with detailed info
-  const list = document.createElement("ul");
-  list.style.cssText =
-    "list-style: none; padding: 0; margin: 0; max-height: 200px; overflow-y: auto;";
+  // Clear and rebuild the overlay content
+  debugOverlay.innerHTML = "";
 
-  removedElements.forEach((el, index) => {
-    const li = document.createElement("li");
-    li.style.cssText =
-      "margin-bottom: 6px; border-bottom: 1px solid #333; padding-bottom: 4px;";
+  // Add title
+  const title = document.createElement("div");
+  title.style.cssText =
+    "font-size: 16px; font-weight: bold; color: #ffc107; margin-bottom: 15px; border-bottom: 1px solid #444; padding-bottom: 8px;";
+  title.textContent = "🔍 Filtering Debug - Elements Removed by Step";
+  debugOverlay.appendChild(title);
 
-    let elementInfo = "";
-    let selector = "";
-    let tagName = "";
-    let text = "";
-    let size = "";
+  // Add close button
+  const closeBtn = document.createElement("button");
+  closeBtn.textContent = "Close Debug Overlay";
+  closeBtn.style.cssText =
+    "position: absolute; top: 15px; right: 15px; background: #ffc107; color: #222; border: none; border-radius: 5px; padding: 6px 12px; font-size: 12px; cursor: pointer;";
+  closeBtn.onclick = () => {
+    debugOverlay.remove();
+    debugOverlay = null;
+    if (highlightOverlay) {
+      highlightOverlay.remove();
+      highlightOverlay = null;
+    }
+  };
+  debugOverlay.appendChild(closeBtn);
 
-    // Debug: log what type of object we're dealing with
-    console.log(`Debug element ${index}:`, el);
-    console.log(`Debug element type:`, typeof el);
-    console.log(`Debug element constructor:`, el?.constructor?.name);
-    console.log(`Debug element instanceof Element:`, el instanceof Element);
+  // Sort steps by step number
+  const sortedSteps = Array.from(debugStepData.entries()).sort(
+    ([a], [b]) => a - b
+  );
 
-    try {
-      if (el instanceof Element) {
-        // It's a real DOM element
-        tagName = el.tagName.toLowerCase();
-        selector = el.id
-          ? `#${el.id}`
-          : `${tagName}${
-              el.className ? "." + el.className.split(" ").join(".") : ""
-            }`;
-        text = el.innerText?.trim().substring(0, 50) || "";
-        const rect = el.getBoundingClientRect();
-        size = `${Math.round(rect.width)}x${Math.round(rect.height)}`;
-      } else if (el && typeof el === "object") {
-        // It's a data object from collection
-        tagName = el.tagName || el.type || "unknown";
-        selector = el.selector || "unknown";
-        text = el.text || el.innerText || "";
-        if (el.boundingRect) {
-          size = `${Math.round(el.boundingRect.width)}x${Math.round(
-            el.boundingRect.height
-          )}`;
-        } else if (el.rect) {
-          size = `${Math.round(el.rect.width)}x${Math.round(el.rect.height)}`;
-        } else {
-          size = "unknown";
+  // Create sections for each step
+  sortedSteps.forEach(([stepNum, stepData]) => {
+    const section = document.createElement("div");
+    section.style.cssText =
+      "margin-bottom: 20px; border: 1px solid #444; border-radius: 8px; padding: 12px;";
+
+    // Step header
+    const header = document.createElement("div");
+    header.style.cssText =
+      "font-weight: bold; color: #ffc107; margin-bottom: 8px; font-size: 14px;";
+    header.textContent = `Step ${stepNum}: ${stepData.stepName}`;
+    if (stepData.functionName) {
+      header.textContent += ` (${stepData.functionName})`;
+    }
+    header.textContent += ` - Removed ${stepData.elements.length} elements`;
+    section.appendChild(header);
+
+    // Reason
+    if (stepData.reason) {
+      const reasonDiv = document.createElement("div");
+      reasonDiv.style.cssText =
+        "color: #aaa; font-size: 12px; margin-bottom: 10px; font-style: italic;";
+      reasonDiv.textContent = `Reason: ${stepData.reason}`;
+      section.appendChild(reasonDiv);
+    }
+
+    // Elements list
+    if (stepData.elements.length > 0) {
+      const list = document.createElement("ul");
+      list.style.cssText =
+        "list-style: none; padding: 0; margin: 0; max-height: 150px; overflow-y: auto;";
+
+      stepData.elements.forEach((el, index) => {
+        const li = document.createElement("li");
+        li.style.cssText =
+          "margin-bottom: 4px; padding: 4px 6px; background: #333; border-radius: 4px; font-size: 12px; cursor: pointer; position: relative; transition: background-color 0.2s;";
+
+        let elementInfo = "";
+        const tagName = el.tagName || "unknown";
+        const size = el.boundingRect
+          ? `${Math.round(el.boundingRect.width)}x${Math.round(
+              el.boundingRect.height
+            )}`
+          : "unknown";
+        const role = el.role || "";
+        const ariaLabel = el.ariaLabel || "";
+        const text = el.text || "";
+        const selector = el.selector || "unknown";
+
+        // Build element info string
+        elementInfo = `${index + 1}. ${tagName}`;
+
+        if (size !== "unknown") {
+          elementInfo += ` (${size})`;
         }
-      } else if (typeof el === "string") {
-        // It's a string - could be a URL or element string representation
-        if (el.startsWith("http")) {
-          // It's a URL
-          tagName = "link";
-          selector = el;
-          text = el;
-          size = "unknown";
-        } else if (el.startsWith("[object ") && el.endsWith("Element]")) {
-          // It's an element string representation like [object HTMLButtonElement]
-          tagName = el
-            .replace("[object ", "")
-            .replace("Element]", "")
-            .toLowerCase();
-          selector = el;
-          text = "";
-          size = "unknown";
-        } else {
-          // It's just a selector string
-          tagName = "selector";
-          selector = el;
-          text = "";
-          size = "unknown";
+
+        if (role) {
+          elementInfo += ` [role="${role}"]`;
         }
-      } else {
-        // Unknown type
-        tagName = "unknown";
-        selector = "unknown";
-        text = "";
-        size = "unknown";
-      }
-    } catch (error) {
-      console.error(`Error processing element ${index}:`, error);
-      selector = "error";
-      tagName = "error";
-      text = "";
-      size = "error";
+
+        if (selector && selector !== "unknown") {
+          const displaySelector =
+            selector.length > 40 ? selector.substring(0, 40) + "..." : selector;
+          elementInfo += ` - ${displaySelector}`;
+        }
+
+        if (text) {
+          elementInfo += ` - "${text.substring(0, 30)}${
+            text.length > 30 ? "..." : ""
+          }"`;
+        }
+
+        if (ariaLabel && ariaLabel !== text) {
+          elementInfo += ` [aria-label="${ariaLabel.substring(0, 20)}${
+            ariaLabel.length > 20 ? "..." : ""
+          }"]`;
+        }
+
+        li.textContent = elementInfo;
+
+        // Add hover highlighting functionality
+        li.addEventListener("mouseenter", () => {
+          li.style.backgroundColor = "#555";
+          highlightElementOnPage(el);
+        });
+
+        li.addEventListener("mouseleave", () => {
+          li.style.backgroundColor = "#333";
+          clearHighlight();
+        });
+
+        // Add hover tooltip for specific removal reason if available
+        if (
+          stepData.removalReasons &&
+          stepData.removalReasons.has(el.selector)
+        ) {
+          const specificReason = stepData.removalReasons.get(el.selector);
+
+          // Add visual indicator that tooltip is available
+          li.style.borderLeft = "3px solid #ffc107";
+          li.title = "Hover for removal reason";
+
+          // Create tooltip
+          const tooltip = document.createElement("div");
+          tooltip.style.cssText = `
+            position: absolute;
+            bottom: 100%;
+            left: 0;
+            background: #000;
+            color: #fff;
+            padding: 8px 12px;
+            border-radius: 6px;
+            font-size: 11px;
+            max-width: 300px;
+            white-space: normal;
+            word-wrap: break-word;
+            z-index: 1000000;
+            opacity: 0;
+            visibility: hidden;
+            transition: opacity 0.2s, visibility 0.2s;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+            border: 1px solid #444;
+            pointer-events: none;
+          `;
+
+          // Set tooltip content
+          tooltip.textContent = `Removal reason: ${specificReason}`;
+          li.appendChild(tooltip);
+
+          // Show tooltip on hover
+          li.addEventListener("mouseenter", () => {
+            tooltip.style.opacity = "1";
+            tooltip.style.visibility = "visible";
+          });
+
+          li.addEventListener("mouseleave", () => {
+            tooltip.style.opacity = "0";
+            tooltip.style.visibility = "hidden";
+          });
+        }
+
+        list.appendChild(li);
+      });
+
+      section.appendChild(list);
     }
 
-    // Create detailed element info
-    elementInfo = `${index + 1}. ${tagName} (${size})`;
-    if (selector && selector !== "unknown") {
-      // Truncate long selectors/URLs
-      const displaySelector =
-        selector.length > 60 ? selector.substring(0, 60) + "..." : selector;
-      elementInfo += ` - ${displaySelector}`;
-    }
-    if (text) {
-      elementInfo += ` - "${text}${text.length >= 50 ? "..." : ""}"`;
-    }
-
-    li.textContent = elementInfo;
-    list.appendChild(li);
+    debugOverlay.appendChild(section);
   });
 
-  section.appendChild(list);
-  overlay.appendChild(section);
+  // Add summary
+  const totalRemoved = Array.from(debugStepData.values()).reduce(
+    (sum, step) => sum + step.elements.length,
+    0
+  );
+  const summary = document.createElement("div");
+  summary.style.cssText =
+    "margin-top: 15px; padding-top: 10px; border-top: 1px solid #444; color: #aaa; font-size: 12px; text-align: center;";
+  summary.textContent = `Total: ${totalRemoved} elements removed across ${
+    debugStepData.size
+  } steps | ${new Date().toLocaleTimeString()}`;
+  debugOverlay.appendChild(summary);
+}
 
-  // Add close button if not present
-  if (!document.getElementById("scope-filter-debug-close")) {
-    const closeBtn = document.createElement("button");
-    closeBtn.id = "scope-filter-debug-close";
-    closeBtn.textContent = "Close Debug Overlay";
-    closeBtn.style.cssText =
-      "margin-top: 12px; background: #ffc107; color: #222; border: none; border-radius: 5px; padding: 6px 16px; font-size: 13px; cursor: pointer; float: right;";
-    closeBtn.onclick = () => overlay.remove();
-    overlay.appendChild(closeBtn);
+// Function to highlight an element on the page
+function highlightElementOnPage(elementData) {
+  if (!highlightOverlay) return;
+
+  // Clear any existing highlights
+  clearHighlight();
+
+  let targetElement = null;
+
+  // Try to find the element using the selector
+  if (elementData.selector && elementData.selector !== "unknown") {
+    try {
+      targetElement = document.querySelector(elementData.selector);
+    } catch (error) {
+      console.warn(
+        "Could not find element with selector:",
+        elementData.selector
+      );
+    }
   }
 
-  // Add timestamp
-  const timestamp = document.createElement("div");
-  timestamp.style.cssText =
-    "color: #666; font-size: 11px; margin-top: 8px; text-align: right;";
-  timestamp.textContent = new Date().toLocaleTimeString();
-  section.appendChild(timestamp);
+  // Fallback to stored element reference
+  if (!targetElement && elementData.element) {
+    targetElement = elementData.element;
+  }
+
+  // If we found the element, highlight it
+  if (targetElement && targetElement.getBoundingClientRect) {
+    try {
+      const rect = targetElement.getBoundingClientRect();
+
+      // Create highlight box
+      const highlightBox = document.createElement("div");
+      highlightBox.style.cssText = `
+        position: absolute;
+        top: ${rect.top + window.scrollY}px;
+        left: ${rect.left + window.scrollX}px;
+        width: ${rect.width}px;
+        height: ${rect.height}px;
+        border: 3px solid #ff4444;
+        background: rgba(255, 68, 68, 0.1);
+        border-radius: 4px;
+        pointer-events: none;
+        z-index: 999997;
+        box-shadow: 0 0 10px rgba(255, 68, 68, 0.5);
+        animation: pulse 1s infinite;
+      `;
+
+      // Add pulse animation
+      const style = document.createElement("style");
+      style.textContent = `
+        @keyframes pulse {
+          0% { opacity: 0.7; }
+          50% { opacity: 1; }
+          100% { opacity: 0.7; }
+        }
+      `;
+      document.head.appendChild(style);
+
+      highlightOverlay.appendChild(highlightBox);
+
+      // Add label with element info
+      const label = document.createElement("div");
+      label.style.cssText = `
+        position: absolute;
+        top: ${Math.max(0, rect.top + window.scrollY - 30)}px;
+        left: ${rect.left + window.scrollX}px;
+        background: #ff4444;
+        color: white;
+        padding: 4px 8px;
+        border-radius: 4px;
+        font-size: 12px;
+        font-weight: bold;
+        white-space: nowrap;
+        pointer-events: none;
+        z-index: 999997;
+        box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+      `;
+
+      const tagName = elementData.tagName || "unknown";
+      const size = elementData.boundingRect
+        ? `${Math.round(elementData.boundingRect.width)}x${Math.round(
+            elementData.boundingRect.height
+          )}`
+        : "unknown";
+      label.textContent = `${tagName} (${size}) - REMOVED`;
+
+      highlightOverlay.appendChild(label);
+    } catch (error) {
+      console.warn("Error highlighting element:", error);
+    }
+  }
+}
+
+// Function to clear highlight
+function clearHighlight() {
+  if (highlightOverlay) {
+    highlightOverlay.innerHTML = "";
+  }
+}
+
+// Function to clear debug data (useful for resetting between runs)
+function clearDebugData() {
+  debugStepData.clear();
+  if (debugOverlay) {
+    debugOverlay.remove();
+    debugOverlay = null;
+  }
+  if (highlightOverlay) {
+    highlightOverlay.remove();
+    highlightOverlay = null;
+  }
+}
+
+// Make debug functions available globally
+window.clearDebugData = clearDebugData;
+window.showFilterDebugOverlay = showFilterDebugOverlay;
+window.debugStepData = debugStepData;
+
+// Helper function to create rich element objects for debug overlay
+function createRichElementObject(el) {
+  if (el instanceof Element) {
+    // Compute unique CSS path for the element
+    const uniqueSelector = computeUniqueCssPath(el);
+    const rect = el.getBoundingClientRect();
+    const text = el.innerText?.trim() || "";
+    const role = el.getAttribute("role") || null;
+    const ariaLabel = el.getAttribute("aria-label") || null;
+
+    return {
+      selector: uniqueSelector,
+      tagName: el.tagName.toLowerCase(),
+      text,
+      boundingRect: rect.toJSON(),
+      role,
+      ariaLabel,
+      element: el, // Keep reference to original element
+    };
+  } else if (el && typeof el === "object") {
+    // Already a rich object, just ensure it has all fields
+    return {
+      selector: el.selector || "unknown",
+      tagName: el.tagName || el.type || "unknown",
+      text: el.text || el.innerText || "",
+      boundingRect: el.boundingRect || el.rect || null,
+      role: el.role || null,
+      ariaLabel: el.ariaLabel || null,
+      element: el.element || null,
+    };
+  } else if (typeof el === "string") {
+    // String - try to resolve it
+    try {
+      const domEl = document.querySelector(el);
+      if (domEl) {
+        return createRichElementObject(domEl);
+      }
+    } catch (error) {
+      console.warn(`Could not resolve selector: ${el}`, error);
+    }
+
+    // Fallback for unresolved string
+    return {
+      selector: el,
+      tagName: "unknown",
+      text: "",
+      boundingRect: null,
+      role: null,
+      ariaLabel: null,
+      element: null,
+    };
+  }
+
+  // Unknown type
+  return {
+    selector: "unknown",
+    tagName: "unknown",
+    text: "",
+    boundingRect: null,
+    role: null,
+    ariaLabel: null,
+    element: null,
+  };
+}
+
+// Helper function to compute unique CSS path (copied from content script)
+function computeUniqueCssPath(el) {
+  if (!(el instanceof Element)) return null;
+  if (el.id) {
+    return `#${CSS.escape(el.id)}`;
+  }
+  const segments = [];
+  let current = el;
+  while (
+    current &&
+    current.nodeType === Node.ELEMENT_NODE &&
+    current !== document.body
+  ) {
+    let seg = current.tagName.toLowerCase();
+    if (current.classList.length > 0) {
+      seg +=
+        "." +
+        Array.from(current.classList)
+          .map((cls) => CSS.escape(cls))
+          .join(".");
+    }
+    const parent = current.parentNode;
+    if (parent && parent.nodeType === Node.ELEMENT_NODE) {
+      const same = Array.from(parent.children).filter((sib) => {
+        if (sib.tagName !== current.tagName) return false;
+        const a = Array.from(sib.classList).sort().join(" ");
+        const b = Array.from(current.classList).sort().join(" ");
+        return a === b;
+      });
+      if (same.length > 1) {
+        const idx = Array.prototype.indexOf.call(parent.children, current) + 1;
+        seg += `:nth-child(${idx})`;
+      }
+    }
+    segments.unshift(seg);
+    current = parent;
+  }
+  return segments.length > 0 ? `body > ${segments.join(" > ")}` : "body";
 }

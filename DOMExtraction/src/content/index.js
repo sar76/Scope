@@ -233,167 +233,262 @@ function initialize() {
 }
 
 /**
- * Collect interactive elements by programmatically hovering over them
- * This approach discovers elements that become interactive on hover
+ * Collect interactive elements using selective targeting of UI components only
+ * This approach is much more efficient and only targets meaningful UI elements
  */
 async function collectInteractiveElementsByHover(root = document) {
   const results = new Set();
-  const hoveredElements = new Set();
 
-  // Get all potential interactive elements
-  const allElements = root.querySelectorAll("*");
-  const candidates = Array.from(allElements).filter((el) => {
-    const tag = el.tagName?.toLowerCase();
-    const style = window.getComputedStyle(el);
-    const rect = el.getBoundingClientRect();
+  // Define specific selectors for UI components we want to target
+  const uiSelectors = [
+    // Interactive elements
+    "button",
+    'input:not([type="hidden"])',
+    "select",
+    "textarea",
+    "a[href]",
+    "label",
+    "form",
 
-    // Skip excluded elements
-    if (
-      [
-        "svg",
-        "path",
-        "circle",
-        "rect",
-        "g",
-        "style",
-        "script",
-        "meta",
-        "link",
-        "head",
-        "title",
-      ].includes(tag)
-    ) {
-      return false;
+    // Elements with interactive roles
+    '[role="button"]',
+    '[role="link"]',
+    '[role="menuitem"]',
+    '[role="tab"]',
+    '[role="checkbox"]',
+    '[role="radio"]',
+    '[role="textbox"]',
+    '[role="combobox"]',
+    '[role="listbox"]',
+
+    // Elements with click handlers
+    "[onclick]",
+    "[data-onclick]",
+
+    // Elements with pointer cursor (but be selective)
+    '[style*="cursor: pointer"]',
+    '[class*="btn"]',
+    '[class*="button"]',
+    '[class*="nav"]',
+    '[class*="menu"]',
+    '[class*="link"]',
+    '[class*="clickable"]',
+
+    // Common UI patterns
+    '[data-testid*="button"]',
+    '[data-testid*="link"]',
+    '[data-testid*="nav"]',
+    "[aria-label]",
+    "[title]",
+
+    // Form elements
+    "fieldset",
+    "legend",
+    "optgroup",
+    "option",
+
+    // Structural elements that might be interactive
+    "nav",
+    "header",
+    "footer",
+    "main",
+    "section[role]",
+    "article[role]",
+    "aside[role]",
+  ];
+
+  console.log("Using selective UI targeting instead of brute force...");
+
+  // Collect elements using selective selectors
+  const candidates = new Set();
+
+  for (const selector of uiSelectors) {
+    try {
+      const elements = root.querySelectorAll(selector);
+      elements.forEach((el) => {
+        // Additional filtering for each found element
+        const style = window.getComputedStyle(el);
+        const rect = el.getBoundingClientRect();
+
+        // Skip hidden or zero-size elements
+        if (
+          style.display === "none" ||
+          style.visibility === "hidden" ||
+          rect.width === 0 ||
+          rect.height === 0
+        ) {
+          return;
+        }
+
+        // Skip elements outside viewport
+        if (
+          rect.bottom < 0 ||
+          rect.top > window.innerHeight ||
+          rect.right < 0 ||
+          rect.left > window.innerWidth
+        ) {
+          return;
+        }
+
+        // Skip elements that are just containers without meaningful content
+        const text = el.innerText?.trim() || "";
+        const hasText = text.length > 0;
+        const hasInteractiveAttributes =
+          el.onclick || el.getAttribute("onclick") || el.getAttribute("role");
+        const isNativeInteractive = [
+          "button",
+          "input",
+          "select",
+          "textarea",
+          "a",
+        ].includes(el.tagName.toLowerCase());
+
+        // Only include if it has text, is native interactive, or has interactive attributes
+        if (hasText || isNativeInteractive || hasInteractiveAttributes) {
+          candidates.add(el);
+        }
+      });
+    } catch (error) {
+      console.warn(`Error with selector ${selector}:`, error);
     }
-
-    // Skip hidden or zero-size elements
-    if (
-      style.display === "none" ||
-      style.visibility === "hidden" ||
-      rect.width === 0 ||
-      rect.height === 0
-    ) {
-      return false;
-    }
-
-    // Skip elements outside viewport
-    if (
-      rect.bottom < 0 ||
-      rect.top > window.innerHeight ||
-      rect.right < 0 ||
-      rect.left > window.innerWidth
-    ) {
-      return false;
-    }
-
-    return true;
-  });
+  }
 
   console.log(
-    `Testing ${candidates.length} candidate elements for hover interactions...`
+    `Found ${candidates.size} candidate UI elements using selective targeting`
   );
 
-  // Test each candidate by hovering over it
-  for (let i = 0; i < candidates.length; i++) {
-    const el = candidates[i];
+  // Convert to array and process
+  const candidateArray = Array.from(candidates);
+
+  // Test each candidate for additional hover interactions
+  for (let i = 0; i < candidateArray.length; i++) {
+    const el = candidateArray[i];
 
     try {
-      // Skip if we already know it's interactive
+      // Add to results if it's already known to be interactive
       if (isElementInteractive(el)) {
         results.add(el);
         continue;
       }
 
-      // Create and dispatch hover events
-      const mouseenterEvent = new MouseEvent("mouseenter", {
-        bubbles: true,
-        cancelable: true,
-        view: window,
-      });
-
-      const mouseoverEvent = new MouseEvent("mouseover", {
-        bubbles: true,
-        cancelable: true,
-        view: window,
-      });
-
-      // Dispatch events
-      el.dispatchEvent(mouseenterEvent);
-      el.dispatchEvent(mouseoverEvent);
-
-      // Wait a bit for any hover effects to trigger
-      await new Promise((resolve) => setTimeout(resolve, 10));
-
-      // Check if the element became interactive after hover
-      const styleAfter = window.getComputedStyle(el);
-      const cursorAfter = styleAfter.cursor;
-
-      // If cursor changed to pointer or element has hover effects, it's interactive
-      if (
-        cursorAfter === "pointer" ||
-        styleAfter.transform !== "none" ||
-        styleAfter.boxShadow !== "none" ||
+      // Test for hover interactions (but be more selective)
+      const style = window.getComputedStyle(el);
+      const hasPointerCursor = style.cursor === "pointer";
+      const hasHoverEffects =
+        style.transform !== "none" || style.boxShadow !== "none";
+      const hasHoverClasses =
         el.classList.contains("hover") ||
-        el.getAttribute("data-hover") === "true"
-      ) {
-        results.add(el);
-        hoveredElements.add(el);
-      }
+        el.getAttribute("data-hover") === "true";
 
-      // Check for newly revealed elements (like tooltips, dropdowns)
-      const newlyVisible = document.querySelectorAll(
-        '[style*="display: block"], [style*="visibility: visible"]'
-      );
-      newlyVisible.forEach((newEl) => {
-        if (!hoveredElements.has(newEl) && isElementInteractive(newEl)) {
-          results.add(newEl);
+      // Only test hover if element shows signs of being interactive
+      if (hasPointerCursor || hasHoverEffects || hasHoverClasses) {
+        // Create and dispatch hover events
+        const mouseenterEvent = new MouseEvent("mouseenter", {
+          bubbles: true,
+          cancelable: true,
+          view: window,
+        });
+
+        const mouseoverEvent = new MouseEvent("mouseover", {
+          bubbles: true,
+          cancelable: true,
+          view: window,
+        });
+
+        // Dispatch events
+        el.dispatchEvent(mouseenterEvent);
+        el.dispatchEvent(mouseoverEvent);
+
+        // Wait a bit for any hover effects to trigger
+        await new Promise((resolve) => setTimeout(resolve, 5));
+
+        // Check if the element became interactive after hover
+        const styleAfter = window.getComputedStyle(el);
+        const cursorAfter = styleAfter.cursor;
+
+        // If cursor changed to pointer or element has hover effects, it's interactive
+        if (
+          cursorAfter === "pointer" ||
+          styleAfter.transform !== "none" ||
+          styleAfter.boxShadow !== "none" ||
+          el.classList.contains("hover") ||
+          el.getAttribute("data-hover") === "true"
+        ) {
+          results.add(el);
         }
-      });
 
-      // Clean up hover state
-      const mouseleaveEvent = new MouseEvent("mouseleave", {
-        bubbles: true,
-        cancelable: true,
-        view: window,
-      });
-      el.dispatchEvent(mouseleaveEvent);
+        // Clean up hover state
+        const mouseleaveEvent = new MouseEvent("mouseleave", {
+          bubbles: true,
+          cancelable: true,
+          view: window,
+        });
+        el.dispatchEvent(mouseleaveEvent);
+      }
     } catch (error) {
       console.warn("Error testing element for hover:", error);
     }
 
-    // Progress update every 50 elements
-    if (i % 50 === 0) {
+    // Progress update every 10 elements
+    if (i % 10 === 0) {
       console.log(
-        `Hover testing progress: ${i}/${candidates.length} elements tested`
+        `Hover testing progress: ${i}/${candidateArray.length} elements tested`
       );
     }
   }
 
   console.log(
-    `Hover-based collection found ${results.size} interactive elements`
+    `Selective collection found ${results.size} interactive UI elements`
   );
   return Array.from(results);
 }
 
 /**
  * Check if an element is already known to be interactive
+ * More selective version that only returns true for meaningful UI components
  */
 function isElementInteractive(el) {
   const tag = el.tagName?.toLowerCase();
   const role = el.getAttribute("role");
   const style = window.getComputedStyle(el);
+  const text = el.innerText?.trim() || "";
+  const rect = el.getBoundingClientRect();
 
-  // Native interactive elements
-  if (
-    ["button", "input", "select", "textarea", "a", "label", "form"].includes(
-      tag
-    )
-  ) {
+  // Skip elements that are too small or have no meaningful content
+  if (rect.width < 10 || rect.height < 10) {
+    return false;
+  }
+
+  // Native interactive elements (but be more selective)
+  if (["button", "input", "select", "textarea", "form"].includes(tag)) {
+    // For inputs, skip hidden inputs
+    if (tag === "input" && el.type === "hidden") {
+      return false;
+    }
     return true;
   }
 
-  // Elements with interactive roles
+  // Links - only if they have meaningful href and text
+  if (tag === "a") {
+    const href = el.getAttribute("href");
+    if (!href || href === "#" || href.startsWith("javascript:")) {
+      return false;
+    }
+    // Only include if it has text or aria-label
+    if (text.length > 0 || el.getAttribute("aria-label")) {
+      return true;
+    }
+    return false;
+  }
+
+  // Labels - only if they have text
+  if (tag === "label" && text.length > 0) {
+    return true;
+  }
+
+  // Elements with interactive roles (but be more selective)
   if (
+    role &&
     [
       "button",
       "link",
@@ -406,17 +501,34 @@ function isElementInteractive(el) {
       "listbox",
     ].includes(role)
   ) {
-    return true;
+    // Only include if they have text or aria-label
+    if (text.length > 0 || el.getAttribute("aria-label")) {
+      return true;
+    }
+    return false;
   }
 
-  // Elements with click handlers
+  // Elements with click handlers (but be more selective)
   if (el.onclick || el.getAttribute("onclick")) {
-    return true;
+    // Only include if they have text or are reasonably sized
+    if (text.length > 0 || (rect.width > 20 && rect.height > 20)) {
+      return true;
+    }
+    return false;
   }
 
-  // Elements with pointer cursor
+  // Elements with pointer cursor (but be very selective)
   if (style.cursor === "pointer") {
-    return true;
+    // Only include if they have meaningful text and are reasonably sized
+    if (
+      text.length > 0 &&
+      text.length < 100 &&
+      rect.width > 20 &&
+      rect.height > 20
+    ) {
+      return true;
+    }
+    return false;
   }
 
   return false;
@@ -643,21 +755,23 @@ const handleRunInspect = withErrorHandling(async (sendResponse) => {
     console.log(`Collected ${elements.length} interactive elements`);
 
     // Map to data objects with selector, tag, text, etc.
-    const collected = elements.map((el) => {
-      const uniqueSelector = computeUniqueCssPath(el);
-      const rect = el.getBoundingClientRect().toJSON();
-      const text = el.innerText?.trim() || "";
-      const role = el.getAttribute("role") || null;
-      const ariaLabel = el.getAttribute("aria-label") || null;
-      return {
-        selector: uniqueSelector,
-        tagName: el.tagName.toLowerCase(),
-        text,
-        boundingRect: rect,
-        role,
-        ariaLabel,
-      };
-    });
+    const collected = elements
+      .filter(isElementInteractive) // Final filter for meaningful UI components
+      .map((el) => {
+        const uniqueSelector = computeUniqueCssPath(el);
+        const rect = el.getBoundingClientRect().toJSON();
+        const text = el.innerText?.trim() || "";
+        const role = el.getAttribute("role") || null;
+        const ariaLabel = el.getAttribute("aria-label") || null;
+        return {
+          selector: uniqueSelector,
+          tagName: el.tagName.toLowerCase(),
+          text,
+          boundingRect: rect,
+          role,
+          ariaLabel,
+        };
+      });
     lastCollectedElements = collected;
 
     // Reply to popup immediately with success
@@ -683,9 +797,14 @@ const handleRunInspect = withErrorHandling(async (sendResponse) => {
  * @param {Array} elements - Array of filtered UI elements
  */
 function showResultsOverlay(elements) {
+  console.log(`showResultsOverlay called with ${elements.length} elements`);
+
   // Remove any existing overlay
   const existing = document.getElementById("scope-extension-results-overlay");
-  if (existing) existing.remove();
+  if (existing) {
+    console.log("Removing existing results overlay");
+    existing.remove();
+  }
 
   const overlay = document.createElement("div");
   overlay.id = "scope-extension-results-overlay";
@@ -712,14 +831,19 @@ function showResultsOverlay(elements) {
     "font-size: 16px; font-weight: bold; margin-bottom: 10px; color: #007bff;";
   overlay.appendChild(title);
 
+  console.log(`Created overlay with title: ${title.textContent}`);
+
   if (elements.length === 0) {
     const empty = document.createElement("div");
     empty.textContent = "No UI elements found.";
     overlay.appendChild(empty);
+    console.log("No elements to display");
   } else {
     const list = document.createElement("ul");
     list.style.cssText =
       "list-style: none; padding: 0; margin: 0; max-height: 40vh; overflow-y: auto;";
+
+    console.log(`Creating list with ${elements.length} elements`);
 
     elements.forEach((el, idx) => {
       const li = document.createElement("li");
@@ -806,6 +930,7 @@ function showResultsOverlay(elements) {
     });
 
     overlay.appendChild(list);
+    console.log(`Added ${elements.length} list items to overlay`);
   }
 
   // Add clear highlight button
@@ -837,6 +962,7 @@ function showResultsOverlay(elements) {
   overlay.appendChild(closeBtn);
 
   document.body.appendChild(overlay);
+  console.log("Results overlay added to document body");
 }
 
 /**
@@ -853,7 +979,9 @@ function handleStopInspect() {
  * Handle toggle debug overlay
  */
 function handleToggleDebugOverlay() {
-  const debugOverlay = document.getElementById("scope-filter-debug-overlay");
+  // Try to find the debug overlay by ID first
+  let debugOverlay = document.getElementById("scope-filter-debug-overlay");
+
   if (debugOverlay) {
     // Toggle visibility
     const isVisible = debugOverlay.style.display !== "none";
@@ -865,8 +993,36 @@ function handleToggleDebugOverlay() {
       2000
     );
   } else {
-    console.log("No debug overlay found to toggle");
-    createNotification("No debug overlay available", "warning", 2000);
+    // Check if there's any debug data to show
+    if (
+      typeof debugStepData !== "undefined" &&
+      debugStepData &&
+      debugStepData.size > 0
+    ) {
+      // Recreate the debug overlay with existing data
+      if (typeof showFilterDebugOverlay === "function") {
+        // Call with empty data to just show existing data
+        showFilterDebugOverlay("", [], "", null, null);
+        createNotification(
+          "🔍 Debug overlay recreated and shown",
+          "info",
+          2000
+        );
+      } else {
+        createNotification(
+          "Debug overlay function not available",
+          "warning",
+          2000
+        );
+      }
+    } else {
+      console.log("No debug overlay found and no debug data available");
+      createNotification(
+        "No debug overlay available - run filtering first",
+        "warning",
+        2000
+      );
+    }
   }
 }
 
@@ -877,46 +1033,78 @@ function handleToggleDebugOverlay() {
  */
 const handleComprehensiveFilter = withErrorHandling(
   async (selectors, sendResponse) => {
-    // Convert selectors to DOM elements, filter out nulls
-    const elements = selectors
-      .map((selector) => {
-        try {
-          return document.querySelector(selector);
-        } catch {
-          return null;
-        }
-      })
-      .filter((el) => el && el.tagName);
+    // Clear any existing debug data at the start
+    if (typeof clearDebugData === "function") {
+      clearDebugData();
+    }
 
-    const filtered = await filterPipeline.applyComprehensiveFiltering(elements);
     createNotification(
-      `✅ Filtered to ${filtered.length} elements`,
-      "success",
-      3000
+      `🔍 Starting filtering with ${selectors.length} selectors`,
+      "info",
+      2000
     );
-    // Update overlay with filtered results
-    lastCollectedElements = filtered.map((el) => {
-      // If the filter pipeline returns DOM elements, map to data objects
-      if (el instanceof Element) {
-        const uniqueSelector = computeUniqueCssPath(el);
-        const rect = el.getBoundingClientRect().toJSON();
-        const text = el.innerText?.trim() || "";
-        const role = el.getAttribute("role") || null;
-        const ariaLabel = el.getAttribute("aria-label") || null;
-        return {
-          selector: uniqueSelector,
-          tagName: el.tagName.toLowerCase(),
-          text,
-          boundingRect: rect,
-          role,
-          ariaLabel,
-        };
-      }
-      // If already a data object, return as is
-      return el;
-    });
-    showResultsOverlay(lastCollectedElements);
-    sendResponse({ success: true, filtered });
+
+    // Pass selectors directly to the filter pipeline
+    try {
+      createNotification(
+        "🔄 Converting selectors to elements...",
+        "info",
+        2000
+      );
+      const filtered = await filterPipeline.applyComprehensiveFiltering(
+        selectors
+      );
+
+      createNotification(
+        `✅ Filtering completed. Found ${filtered.length} elements`,
+        "success",
+        3000
+      );
+
+      // Update overlay with filtered results
+      createNotification("🔄 Updating results overlay...", "info", 2000);
+      lastCollectedElements = filtered.map((el) => {
+        // If the filter pipeline returns DOM elements, map to data objects
+        if (el instanceof Element) {
+          const uniqueSelector = computeUniqueCssPath(el);
+          const rect = el.getBoundingClientRect().toJSON();
+          const text = el.innerText?.trim() || "";
+          const role = el.getAttribute("role") || null;
+          const ariaLabel = el.getAttribute("aria-label") || null;
+          return {
+            selector: uniqueSelector,
+            tagName: el.tagName.toLowerCase(),
+            text,
+            boundingRect: rect,
+            role,
+            ariaLabel,
+          };
+        }
+        // If already a data object, return as is
+        return el;
+      });
+
+      createNotification(
+        `📊 Updated lastCollectedElements with ${lastCollectedElements.length} elements`,
+        "info",
+        2000
+      );
+
+      // Show the results overlay
+      showResultsOverlay(lastCollectedElements);
+
+      createNotification(
+        "✅ Results overlay should now be visible",
+        "success",
+        2000
+      );
+
+      sendResponse({ success: true, filtered });
+    } catch (error) {
+      createNotification(`❌ Filtering error: ${error.message}`, "error", 5000);
+      console.error("Filtering error:", error);
+      sendResponse({ success: false, error: error.message });
+    }
   },
   "handleComprehensiveFilter"
 );
