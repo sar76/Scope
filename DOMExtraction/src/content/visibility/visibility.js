@@ -22,22 +22,6 @@ export function isTrulyVisible(item) {
     return false;
   }
 
-  // Enhanced viewport bounds checking with scroll consideration
-  const scrollTop = window.pageYOffset || document.documentElement.scrollTop;
-  const scrollLeft = window.pageXOffset || document.documentElement.scrollLeft;
-  const viewportHeight = window.innerHeight;
-  const viewportWidth = window.innerWidth;
-
-  // Check if element is completely outside viewport (including scroll)
-  if (
-    r.bottom + scrollTop < 0 ||
-    r.top + scrollTop > viewportHeight + scrollTop ||
-    r.right + scrollLeft < 0 ||
-    r.left + scrollLeft > viewportWidth + scrollLeft
-  ) {
-    return false;
-  }
-
   // Multi-point occlusion testing (more robust than single center point)
   const testPoints = generateTestPoints(r);
 
@@ -65,46 +49,20 @@ export function isTrulyVisible(item) {
 export function isBasicVisible(item) {
   const { node, boundingRect: r } = item;
 
-  // Basic CSS visibility checks
+  // Primary check: Bounding box area threshold
+  const area = r.width * r.height;
+  if (area < THRESHOLDS.MIN_AREA) {
+    return false;
+  }
+
+  // Essential CSS property checks for edge cases where bounding boxes exist but element is hidden
   const style = getCachedComputedStyle(node);
-  if (
-    style.display === "none" ||
-    style.visibility === "hidden" ||
-    parseFloat(style.opacity) === 0 ||
-    r.width <= 0 ||
-    r.height <= 0
-  ) {
+  if (style.display === "none" || style.visibility === "hidden") {
     return false;
   }
 
-  // Check for CSS transforms that might hide the element
-  if (!isTransformVisible(style.transform)) {
-    return false;
-  }
-
-  // Check for clip-path that might hide the element
-  if (!isClipPathVisible(style.clipPath)) {
-    return false;
-  }
-
-  // Simple viewport check (less strict)
-  if (
-    r.bottom < -THRESHOLDS.VIEWPORT_MARGIN ||
-    r.top > window.innerHeight + THRESHOLDS.VIEWPORT_MARGIN ||
-    r.right < -THRESHOLDS.VIEWPORT_MARGIN ||
-    r.left > window.innerWidth + THRESHOLDS.VIEWPORT_MARGIN
-  ) {
-    return false;
-  }
-
-  // Simple center point occlusion check
-  const cx = r.left + r.width / 2;
-  const cy = r.top + r.height / 2;
-  const elementAtPoint = document.elementFromPoint(cx, cy);
-
-  return (
-    elementAtPoint && (elementAtPoint === node || node.contains(elementAtPoint))
-  );
+  // Occlusion check removed
+  return true;
 }
 
 /**
@@ -148,25 +106,6 @@ export function isClipPathVisible(clipPath) {
   }
 
   return true;
-}
-
-/**
- * Check if element is within viewport bounds with scroll consideration
- * @param {Object} boundingRect - Element's bounding rectangle
- * @returns {boolean} True if element is within viewport
- */
-export function isWithinViewportBounds(boundingRect) {
-  const scrollTop = window.pageYOffset || document.documentElement.scrollTop;
-  const scrollLeft = window.pageXOffset || document.documentElement.scrollLeft;
-  const viewportHeight = window.innerHeight;
-  const viewportWidth = window.innerWidth;
-
-  return (
-    boundingRect.bottom + scrollTop >= 0 &&
-    boundingRect.top + scrollTop <= viewportHeight + scrollTop &&
-    boundingRect.right + scrollLeft >= 0 &&
-    boundingRect.left + scrollLeft <= viewportWidth + scrollLeft
-  );
 }
 
 /**

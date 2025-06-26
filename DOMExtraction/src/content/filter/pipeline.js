@@ -10,7 +10,8 @@ import { DeduplicationFilter } from "./deduplication.js";
 import { SpatialFilter } from "./spatial.js";
 import { LLMService } from "../services/llm.js";
 import { calculateIoU, calculateArea } from "../visibility/geometry.js";
-import { cacheSelector } from "../utils/dom.js";
+import { cacheSelector, extractElementSignature } from "../utils/dom.js";
+import { embedText, cosineSimilarity } from "../services/embedding.js";
 
 /**
  * Filter pipeline class for comprehensive element filtering
@@ -74,20 +75,6 @@ export class FilterPipeline {
     );
     filtered = dedupeSurvivors;
     console.log(`After deduplication: ${filtered.length} elements`);
-
-    // Step 3: Spatial filtering
-    const { survivors: spatialSurvivors, removedReasons: spatialReasons } =
-      this.spatialFilter.filterByViewportBoundsWithReasons(filtered);
-    showFilterDebugOverlay(
-      "Basic Spatial Filtering",
-      Array.from(spatialReasons.keys()).map(createRichElementObject),
-      "Out of viewport",
-      3,
-      "Basic spatial filtering",
-      spatialReasons
-    );
-    filtered = spatialSurvivors;
-    console.log(`After spatial filtering: ${filtered.length} elements`);
 
     return filtered;
   }
@@ -269,51 +256,15 @@ export class FilterPipeline {
         `After interactive prioritization: ${elements.length} elements`
       );
 
-      // Step 7: Semantic similarity filtering with reasons
-      updateProgress(7, "Step 6: Semantic similarity analysis...");
-      const { survivors: semanticSurvivors, removedReasons: semanticReasons } =
-        this.applySemanticSimilarityFilteringWithReasons(elements);
-      // Show actual filtering before ensureMinimumSurvivors
-      showFilterDebugOverlay(
-        "Semantic Similarity Filtering",
-        Array.from(semanticReasons.keys()).map(createRichElementObject),
-        "Semantically similar",
-        14,
-        "Semantic similarity filtering",
-        semanticReasons
-      );
-      elements = this.ensureMinimumSurvivors(
-        semanticSurvivors,
-        prev,
-        "Semantic similarity filtering"
-      );
+      // Step 7: Cluster-based deduplication (replaces semantic/functional dedupe)
+      updateProgress(7, "Step 6: Cluster-based deduplication...");
+      elements = await this.clusterDeduplicateElements(elements);
       prev = elements.slice();
-      console.log(`After semantic filtering: ${elements.length} elements`);
-
-      // Step 8: Functional similarity filtering with reasons
-      updateProgress(8, "Step 7: Functional similarity analysis...");
-      const {
-        survivors: functionalSurvivors,
-        removedReasons: functionalReasons,
-      } = this.applyFunctionalSimilarityFilteringWithReasons(elements);
-      // Show actual filtering before ensureMinimumSurvivors
-      showFilterDebugOverlay(
-        "Functional Similarity Filtering",
-        Array.from(functionalReasons.keys()).map(createRichElementObject),
-        "Functionally similar",
-        15,
-        "Functional similarity filtering",
-        functionalReasons
+      console.log(
+        `After cluster-based deduplication: ${elements.length} elements`
       );
-      elements = this.ensureMinimumSurvivors(
-        functionalSurvivors,
-        prev,
-        "Functional similarity filtering"
-      );
-      prev = elements.slice();
-      console.log(`After functional filtering: ${elements.length} elements`);
 
-      // Step 9: LLM-based analysis (batched)
+      // Step 8: LLM-based analysis (batched)
       updateProgress(9, "Step 8: LLM-based element classification...");
       elements = await this.applyLLMAnalysis(elements, updateProgress, 10, 20);
       // LLM analysis doesn't filter, just analyzes and adds metadata
@@ -846,169 +797,36 @@ export class FilterPipeline {
   }
 
   /**
-   * Apply semantic similarity filtering with reasons
-   * @param {Array} elements - Array of elements
-   * @returns {Object} {survivors: Element[], removedReasons: Map<string, string>}
+   * Cluster-based deduplication using rich signatures and embeddings
+   * @param {Array<Element>} elements
+   * @returns {Promise<Array<Element>>} Deduped elements
    */
-  applySemanticSimilarityFilteringWithReasons(elements) {
-    // Type guard to ensure we're working with Elements
-    if (elements.length > 0 && !(elements[0] instanceof Element)) {
-      console.error(
-        "applySemanticSimilarityFilteringWithReasons expects Element array, got:",
-        elements[0]
-      );
-      return { survivors: [], removedReasons: new Map() };
+  async clusterDeduplicateElements(elements) {
+    // 1. Extract signatures
+    const items = elements.map((el) => extractElementSignature(el));
+    // 2. Compute embeddings
+    for (const item of items) {
+      item.vec = await embedText(item.text);
     }
-
-    const survivors = [];
-    const removedReasons = new Map();
-
-    for (let i = 0; i < elements.length; i++) {
-      let isDuplicate = false;
-      let duplicateOf = null;
-
-      for (let j = 0; j < survivors.length; j++) {
-        const similarity = this.calculateSemanticSimilarity(
-          elements[i],
-          survivors[j]
-        );
-        if (similarity > THRESHOLDS.SEMANTIC_SIMILARITY) {
-          isDuplicate = true;
-          duplicateOf = survivors[j];
-          break;
+    // 3. Cluster
+    const clusters = [];
+    for (const item of items) {
+      let placed = false;
+      for (const cluster of clusters) {
+        const rep = cluster[0];
+        if (item.href === rep.href && item.icon === rep.icon) {
+          const sim = cosineSimilarity(item.vec, rep.vec);
+          if (sim >= 0.9) {
+            cluster.push(item);
+            placed = true;
+            break;
+          }
         }
       }
-
-      if (!isDuplicate) {
-        survivors.push(elements[i]);
-      } else {
-        const selector = cacheSelector(elements[i]);
-        const duplicateSelector = duplicateOf
-          ? cacheSelector(duplicateOf)
-          : "unknown";
-        const text =
-          elements[i].innerText?.trim().substring(0, 50) || "no text";
-        removedReasons.set(
-          selector,
-          `semantically similar to ${duplicateSelector} (text: "${text}...")`
-        );
-      }
+      if (!placed) clusters.push([item]);
     }
-
-    return { survivors, removedReasons };
-  }
-
-  /**
-   * Apply semantic similarity filtering
-   * @param {Array} elements - Array of elements
-   * @returns {Array} Filtered elements
-   */
-  applySemanticSimilarityFiltering(elements) {
-    const filtered = [];
-
-    for (let i = 0; i < elements.length; i++) {
-      let isDuplicate = false;
-
-      for (let j = 0; j < filtered.length; j++) {
-        const similarity = this.calculateSemanticSimilarity(
-          elements[i],
-          filtered[j]
-        );
-        if (similarity > THRESHOLDS.SEMANTIC_SIMILARITY) {
-          isDuplicate = true;
-          break;
-        }
-      }
-
-      if (!isDuplicate) {
-        filtered.push(elements[i]);
-      }
-    }
-
-    return filtered;
-  }
-
-  /**
-   * Apply functional similarity filtering with reasons
-   * @param {Array} elements - Array of elements
-   * @returns {Object} {survivors: Element[], removedReasons: Map<string, string>}
-   */
-  applyFunctionalSimilarityFilteringWithReasons(elements) {
-    // Type guard to ensure we're working with Elements
-    if (elements.length > 0 && !(elements[0] instanceof Element)) {
-      console.error(
-        "applyFunctionalSimilarityFilteringWithReasons expects Element array, got:",
-        elements[0]
-      );
-      return { survivors: [], removedReasons: new Map() };
-    }
-
-    const survivors = [];
-    const removedReasons = new Map();
-
-    for (let i = 0; i < elements.length; i++) {
-      let isDuplicate = false;
-      let duplicateOf = null;
-
-      for (let j = 0; j < survivors.length; j++) {
-        const similarity = this.calculateFunctionalSimilarity(
-          elements[i],
-          survivors[j]
-        );
-        if (similarity > THRESHOLDS.FUNCTIONAL_SIMILARITY) {
-          isDuplicate = true;
-          duplicateOf = survivors[j];
-          break;
-        }
-      }
-
-      if (!isDuplicate) {
-        survivors.push(elements[i]);
-      } else {
-        const selector = cacheSelector(elements[i]);
-        const duplicateSelector = duplicateOf
-          ? cacheSelector(duplicateOf)
-          : "unknown";
-        const tag = elements[i].tagName.toLowerCase();
-        const role = elements[i].getAttribute("role") || "none";
-        removedReasons.set(
-          selector,
-          `functionally similar to ${duplicateSelector} (tag: ${tag}, role: ${role})`
-        );
-      }
-    }
-
-    return { survivors, removedReasons };
-  }
-
-  /**
-   * Apply functional similarity filtering
-   * @param {Array} elements - Array of elements
-   * @returns {Array} Filtered elements
-   */
-  applyFunctionalSimilarityFiltering(elements) {
-    const filtered = [];
-
-    for (let i = 0; i < elements.length; i++) {
-      let isDuplicate = false;
-
-      for (let j = 0; j < filtered.length; j++) {
-        const similarity = this.calculateFunctionalSimilarity(
-          elements[i],
-          filtered[j]
-        );
-        if (similarity > THRESHOLDS.FUNCTIONAL_SIMILARITY) {
-          isDuplicate = true;
-          break;
-        }
-      }
-
-      if (!isDuplicate) {
-        filtered.push(elements[i]);
-      }
-    }
-
-    return filtered;
+    // 4. Collapse
+    return clusters.map((c) => c[0].el);
   }
 
   /**
@@ -1828,7 +1646,10 @@ function showFilterDebugOverlay(
 
 // Function to highlight an element on the page
 function highlightElementOnPage(elementData) {
-  if (!highlightOverlay) return;
+  if (!highlightOverlay) {
+    console.warn("Highlight overlay not available");
+    return;
+  }
 
   // Clear any existing highlights
   clearHighlight();
@@ -1839,10 +1660,14 @@ function highlightElementOnPage(elementData) {
   if (elementData.selector && elementData.selector !== "unknown") {
     try {
       targetElement = document.querySelector(elementData.selector);
+      if (!targetElement) {
+        console.warn("Element not found with selector:", elementData.selector);
+      }
     } catch (error) {
       console.warn(
         "Could not find element with selector:",
-        elementData.selector
+        elementData.selector,
+        error
       );
     }
   }
@@ -1852,78 +1677,152 @@ function highlightElementOnPage(elementData) {
     targetElement = elementData.element;
   }
 
-  // If we found the element, highlight it
-  if (targetElement && targetElement.getBoundingClientRect) {
-    try {
-      // Always scroll the element into view (centered, smooth)
-      targetElement.scrollIntoView({
-        behavior: "smooth",
-        block: "center",
-        inline: "center",
-      });
+  // If we still don't have a target element, try to find it by other means
+  if (!targetElement) {
+    console.warn("No target element found for highlighting:", elementData);
+    return;
+  }
 
-      const rect = targetElement.getBoundingClientRect();
+  // Check if element has getBoundingClientRect
+  if (!targetElement.getBoundingClientRect) {
+    console.warn(
+      "Element does not have getBoundingClientRect method:",
+      targetElement
+    );
+    return;
+  }
 
-      // Create highlight box
-      const highlightBox = document.createElement("div");
-      highlightBox.style.cssText = `
-        position: absolute;
-        top: ${rect.top + window.scrollY}px;
-        left: ${rect.left + window.scrollX}px;
-        width: ${rect.width}px;
-        height: ${rect.height}px;
-        border: 3px solid #ff4444;
-        background: rgba(255, 68, 68, 0.1);
-        border-radius: 4px;
-        pointer-events: none;
-        z-index: 999997;
-        box-shadow: 0 0 10px rgba(255, 68, 68, 0.5);
-        animation: pulse 1s infinite;
-      `;
+  try {
+    // Always scroll the element into view (centered, smooth)
+    targetElement.scrollIntoView({
+      behavior: "smooth",
+      block: "center",
+      inline: "center",
+    });
 
-      // Add pulse animation
-      const style = document.createElement("style");
-      style.textContent = `
-        @keyframes pulse {
-          0% { opacity: 0.7; }
-          50% { opacity: 1; }
-          100% { opacity: 0.7; }
+    // Wait a bit for scroll to complete, then get the rect
+    setTimeout(() => {
+      try {
+        const rect = targetElement.getBoundingClientRect();
+
+        // Debug logging
+        console.log("Highlighting element:", {
+          tagName: targetElement.tagName,
+          selector: elementData.selector,
+          rect: {
+            top: rect.top,
+            left: rect.left,
+            width: rect.width,
+            height: rect.height,
+            area: rect.width * rect.height,
+          },
+          scrollY: window.scrollY,
+          scrollX: window.scrollX,
+        });
+
+        // Check if element has valid dimensions
+        if (rect.width <= 0 || rect.height <= 0) {
+          console.warn("Element has zero or negative dimensions:", {
+            width: rect.width,
+            height: rect.height,
+            element: targetElement,
+          });
+          return;
         }
-      `;
-      document.head.appendChild(style);
 
-      highlightOverlay.appendChild(highlightBox);
+        // Check if element is in viewport
+        if (
+          rect.bottom < 0 ||
+          rect.top > window.innerHeight ||
+          rect.right < 0 ||
+          rect.left > window.innerWidth
+        ) {
+          console.warn("Element is outside viewport:", {
+            rect,
+            viewport: { width: window.innerWidth, height: window.innerHeight },
+          });
+        }
 
-      // Add label with element info
-      const label = document.createElement("div");
-      label.style.cssText = `
-        position: absolute;
-        top: ${Math.max(0, rect.top + window.scrollY - 30)}px;
-        left: ${rect.left + window.scrollX}px;
-        background: #ff4444;
-        color: white;
-        padding: 4px 8px;
-        border-radius: 4px;
-        font-size: 12px;
-        font-weight: bold;
-        white-space: nowrap;
-        pointer-events: none;
-        z-index: 999997;
-        box-shadow: 0 2px 8px rgba(0,0,0,0.3);
-      `;
+        // Create highlight box with improved positioning
+        const highlightBox = document.createElement("div");
+        const top = rect.top + window.scrollY;
+        const left = rect.left + window.scrollX;
 
-      const tagName = elementData.tagName || "unknown";
-      const size = elementData.boundingRect
-        ? `${Math.round(elementData.boundingRect.width)}x${Math.round(
-            elementData.boundingRect.height
-          )}`
-        : "unknown";
-      label.textContent = `${tagName} (${size}) - REMOVED`;
+        highlightBox.style.cssText = `
+          position: absolute;
+          top: ${top}px;
+          left: ${left}px;
+          width: ${rect.width}px;
+          height: ${rect.height}px;
+          border: 3px solid #ff4444;
+          background: rgba(255, 68, 68, 0.1);
+          border-radius: 4px;
+          pointer-events: none;
+          z-index: 999997;
+          box-shadow: 0 0 10px rgba(255, 68, 68, 0.5);
+          animation: pulse 1s infinite;
+        `;
 
-      highlightOverlay.appendChild(label);
-    } catch (error) {
-      console.warn("Error highlighting element:", error);
-    }
+        // Add pulse animation if not already present
+        if (!document.querySelector("#scope-pulse-animation")) {
+          const style = document.createElement("style");
+          style.id = "scope-pulse-animation";
+          style.textContent = `
+            @keyframes pulse {
+              0% { opacity: 0.7; }
+              50% { opacity: 1; }
+              100% { opacity: 0.7; }
+            }
+          `;
+          document.head.appendChild(style);
+        }
+
+        highlightOverlay.appendChild(highlightBox);
+
+        // Add label with element info
+        const label = document.createElement("div");
+        const labelTop = Math.max(0, top - 30);
+
+        label.style.cssText = `
+          position: absolute;
+          top: ${labelTop}px;
+          left: ${left}px;
+          background: #ff4444;
+          color: white;
+          padding: 4px 8px;
+          border-radius: 4px;
+          font-size: 12px;
+          font-weight: bold;
+          white-space: nowrap;
+          pointer-events: none;
+          z-index: 999997;
+          box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+          max-width: 300px;
+          overflow: hidden;
+          text-overflow: ellipsis;
+        `;
+
+        const tagName =
+          elementData.tagName ||
+          targetElement.tagName.toLowerCase() ||
+          "unknown";
+        const size = `${Math.round(rect.width)}x${Math.round(rect.height)}`;
+        const text = elementData.text || targetElement.innerText?.trim() || "";
+        const displayText =
+          text.length > 20 ? text.substring(0, 20) + "..." : text;
+
+        label.textContent = `${tagName} (${size}) - ${displayText}`;
+        label.title = `${tagName} (${size}) - ${text}`;
+
+        highlightOverlay.appendChild(label);
+
+        console.log("Highlight created successfully for:", tagName, size);
+      } catch (error) {
+        console.error("Error creating highlight:", error);
+      }
+    }, 100); // Small delay to ensure scroll completes
+  } catch (error) {
+    console.error("Error highlighting element:", error);
   }
 }
 

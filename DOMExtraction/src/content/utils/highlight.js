@@ -27,7 +27,16 @@ export class HighlightManager {
       typeof element === "string" ? document.querySelector(element) : element;
 
     if (!targetElement) {
-      console.warn("Element not found for highlighting");
+      console.warn("Element not found for highlighting:", element);
+      return null;
+    }
+
+    // Check if element has getBoundingClientRect
+    if (!targetElement.getBoundingClientRect) {
+      console.warn(
+        "Element does not have getBoundingClientRect method:",
+        targetElement
+      );
       return null;
     }
 
@@ -38,18 +47,69 @@ export class HighlightManager {
       inline: "center",
     });
 
-    const rect = targetElement.getBoundingClientRect();
-    const highlight = this.createHighlightOverlay(rect, options);
+    // Wait a bit for scroll to complete, then create highlight
+    setTimeout(() => {
+      try {
+        const rect = targetElement.getBoundingClientRect();
 
-    document.body.appendChild(highlight);
-    this.currentHighlight = highlight;
+        // Debug logging
+        console.log("HighlightManager highlighting element:", {
+          tagName: targetElement.tagName,
+          selector: typeof element === "string" ? element : "direct reference",
+          rect: {
+            top: rect.top,
+            left: rect.left,
+            width: rect.width,
+            height: rect.height,
+            area: rect.width * rect.height,
+          },
+          scrollY: window.scrollY,
+          scrollX: window.scrollX,
+        });
 
-    // Animate in
-    if (options.animated !== false) {
-      this.animateHighlight(highlight, "in");
-    }
+        // Check if element has valid dimensions
+        if (rect.width <= 0 || rect.height <= 0) {
+          console.warn("Element has zero or negative dimensions:", {
+            width: rect.width,
+            height: rect.height,
+            element: targetElement,
+          });
+          return;
+        }
 
-    return highlight;
+        // Check if element is in viewport
+        if (
+          rect.bottom < 0 ||
+          rect.top > window.innerHeight ||
+          rect.right < 0 ||
+          rect.left > window.innerWidth
+        ) {
+          console.warn("Element is outside viewport:", {
+            rect,
+            viewport: { width: window.innerWidth, height: window.innerHeight },
+          });
+        }
+
+        const highlight = this.createHighlightOverlay(rect, options);
+
+        document.body.appendChild(highlight);
+        this.currentHighlight = highlight;
+
+        // Animate in
+        if (options.animated !== false) {
+          this.animateHighlight(highlight, "in");
+        }
+
+        console.log(
+          "HighlightManager created highlight successfully for:",
+          targetElement.tagName
+        );
+      } catch (error) {
+        console.error("Error creating highlight in HighlightManager:", error);
+      }
+    }, 100); // Small delay to ensure scroll completes
+
+    return this.currentHighlight;
   }
 
   /**

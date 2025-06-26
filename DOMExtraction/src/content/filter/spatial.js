@@ -1,10 +1,9 @@
 /**
  * Spatial filter for spatial analysis and filtering
- * Handles viewport bounds, top-level filtering, and spatial relationships
+ * Handles top-level filtering and spatial relationships
  */
 
 import { THRESHOLDS } from "@shared/constants.js";
-import { isWithinViewportBounds } from "../visibility/visibility.js";
 import { calculateIoU, calculateArea } from "../visibility/geometry.js";
 
 /**
@@ -13,22 +12,6 @@ import { calculateIoU, calculateArea } from "../visibility/geometry.js";
 export class SpatialFilter {
   constructor() {
     this.cache = new WeakMap();
-  }
-
-  /**
-   * Filter elements by viewport bounds
-   * @param {Array} elements - Array of elements to filter
-   * @returns {Array} Filtered elements
-   */
-  filterByViewportBounds(elements) {
-    return elements.filter((element) => {
-      if (!element || !element.getBoundingClientRect) {
-        return false;
-      }
-
-      const rect = element.getBoundingClientRect();
-      return isWithinViewportBounds(rect);
-    });
   }
 
   /**
@@ -201,43 +184,6 @@ export class SpatialFilter {
    */
   clearCache() {
     this.cache.clear();
-  }
-
-  /**
-   * Filter elements by viewport bounds with reasons
-   * @param {Array} elements - Array of elements to filter
-   * @returns {Object} {survivors: Element[], removedReasons: Map<string, string>}
-   */
-  filterByViewportBoundsWithReasons(elements) {
-    const survivors = [];
-    const removedReasons = new Map();
-
-    for (const element of elements) {
-      if (!element || !element.getBoundingClientRect) {
-        const selector = this.getSelector(element);
-        removedReasons.set(selector, "Invalid element");
-        continue;
-      }
-
-      const rect = element.getBoundingClientRect();
-      const isInViewport = isWithinViewportBounds(rect);
-
-      if (isInViewport) {
-        survivors.push(element);
-      } else {
-        // Determine specific reason for being out of viewport
-        let reason = "out of viewport";
-        if (rect.right < 0) reason = "left of viewport";
-        else if (rect.left > window.innerWidth) reason = "right of viewport";
-        else if (rect.bottom < 0) reason = "above viewport";
-        else if (rect.top > window.innerHeight) reason = "below viewport";
-
-        const selector = this.getSelector(element);
-        removedReasons.set(selector, reason);
-      }
-    }
-
-    return { survivors, removedReasons };
   }
 
   /**

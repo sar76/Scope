@@ -4,11 +4,7 @@
  */
 
 import { THRESHOLDS } from "@shared/constants.js";
-import {
-  isTrulyVisible,
-  isBasicVisible,
-  isWithinViewportBounds,
-} from "../visibility/visibility.js";
+import { isTrulyVisible, isBasicVisible } from "../visibility/visibility.js";
 import { cacheSelector } from "../utils/dom.js";
 
 /**
@@ -48,22 +44,6 @@ export class VisibilityFilter {
 
       const rect = element.getBoundingClientRect();
       return isTrulyVisible({ node: element, boundingRect: rect });
-    });
-  }
-
-  /**
-   * Filter elements by viewport bounds
-   * @param {Array} elements - Array of elements to filter
-   * @returns {Array} Filtered elements
-   */
-  filterByViewportBounds(elements) {
-    return elements.filter((element) => {
-      if (!element || !element.getBoundingClientRect) {
-        return false;
-      }
-
-      const rect = element.getBoundingClientRect();
-      return isWithinViewportBounds(rect);
     });
   }
 
@@ -180,71 +160,24 @@ export class VisibilityFilter {
         continue;
       }
       const rect = element.getBoundingClientRect();
-      const isVisible = isBasicVisible({ node: element, boundingRect: rect });
-      if (isVisible) {
+      // Only check area threshold for now
+      const area = rect.width * rect.height;
+      if (area >= THRESHOLDS.MIN_AREA) {
         cssSurvivors.push(element);
       } else {
-        // Determine specific reason for failure
-        const reason = this.getVisibilityFailureReason(element, rect);
         const selector = cacheSelector(element);
-        cssRemovedReasons.set(selector, reason);
+        cssRemovedReasons.set(
+          selector,
+          `area too small: ${Math.round(area)}px² (min: ${
+            THRESHOLDS.MIN_AREA
+          }px²)`
+        );
       }
     }
 
-    // --- Pass 2: Occlusion/stacking checks only on CSS-visible elements ---
-    const survivors = [];
-    const removedReasons = new Map(cssRemovedReasons); // Start with CSS removals
-
-    for (const element of cssSurvivors) {
-      const rect = element.getBoundingClientRect();
-      // Only run occlusion/stacking checks (isTrulyVisible minus isBasicVisible)
-      // We'll use isTrulyVisible, but skip isBasicVisible since already passed
-      // So, replicate isTrulyVisible minus the isBasicVisible check
-      // (viewport bounds, occlusion, etc.)
-      // --- Viewport bounds check ---
-      const scrollTop =
-        window.pageYOffset || document.documentElement.scrollTop;
-      const scrollLeft =
-        window.pageXOffset || document.documentElement.scrollLeft;
-      const viewportHeight = window.innerHeight;
-      const viewportWidth = window.innerWidth;
-      if (
-        rect.bottom + scrollTop < 0 ||
-        rect.top + scrollTop > viewportHeight + scrollTop ||
-        rect.right + scrollLeft < 0 ||
-        rect.left + scrollLeft > viewportWidth + scrollLeft
-      ) {
-        removedReasons.set(
-          cacheSelector(element),
-          "off-screen (viewport bounds)"
-        );
-        continue;
-      }
-      // --- Occlusion test (multi-point) ---
-      const { generateTestPoints } = require("../visibility/geometry.js");
-      const testPoints = generateTestPoints(rect);
-      let visiblePoints = 0;
-      for (const point of testPoints) {
-        const elementAtPoint = document.elementFromPoint(point.x, point.y);
-        if (
-          elementAtPoint &&
-          (elementAtPoint === element || element.contains(elementAtPoint))
-        ) {
-          visiblePoints++;
-        }
-      }
-      // Require at least 60% of points to be visible
-      const THRESHOLDS = require("@shared/constants.js").THRESHOLDS;
-      if (visiblePoints / testPoints.length < THRESHOLDS.VISIBILITY_POINTS) {
-        removedReasons.set(
-          cacheSelector(element),
-          `occluded: only ${visiblePoints}/${testPoints.length} points visible`
-        );
-        continue;
-      }
-      // If passed all checks, keep as survivor
-      survivors.push(element);
-    }
+    // --- Pass 2: Skip all further checks, just return survivors ---
+    const survivors = cssSurvivors;
+    const removedReasons = new Map(cssRemovedReasons);
 
     return { survivors, removedReasons };
   }
@@ -279,39 +212,22 @@ export class VisibilityFilter {
    * @returns {string} Specific failure reason
    */
   getVisibilityFailureReason(element, rect) {
-    const style = window.getComputedStyle(element);
+    // Primary check: Area threshold
+    const area = rect.width * rect.height;
+    if (area < THRESHOLDS.MIN_AREA) {
+      return `area too small: ${Math.round(area)}px² (min: ${
+        THRESHOLDS.MIN_AREA
+      }px²)`;
+    }
 
-    // Check display
+    // Essential CSS property checks
+    const style = window.getComputedStyle(element);
     if (style.display === "none") {
       return "display: none";
     }
 
-    // Check visibility
     if (style.visibility === "hidden") {
       return "visibility: hidden";
-    }
-
-    // Check opacity
-    const opacity = parseFloat(style.opacity);
-    if (opacity < 0.01) {
-      return `opacity: ${opacity}`;
-    }
-
-    // Check dimensions
-    if (rect.width <= 0 || rect.height <= 0) {
-      return `zero dimensions: ${Math.round(rect.width)}x${Math.round(
-        rect.height
-      )}`;
-    }
-
-    // Check position (off-screen)
-    if (
-      rect.right < 0 ||
-      rect.bottom < 0 ||
-      rect.left > window.innerWidth ||
-      rect.top > window.innerHeight
-    ) {
-      return "off-screen";
     }
 
     return "not visible";
@@ -324,39 +240,28 @@ export class VisibilityFilter {
    * @returns {string} Specific failure reason
    */
   getComprehensiveVisibilityFailureReason(element, rect) {
-    const style = window.getComputedStyle(element);
+    // Primary check: Area threshold
+    const area = rect.width * rect.height;
+    if (area < THRESHOLDS.MIN_AREA) {
+      return `area too small: ${Math.round(area)}px² (min: ${
+        THRESHOLDS.MIN_AREA
+      }px²)`;
+    }
 
-    // Check display
+    // Essential CSS property checks
+    const style = window.getComputedStyle(element);
     if (style.display === "none") {
       return "display: none";
     }
 
-    // Check visibility
     if (style.visibility === "hidden") {
       return "visibility: hidden";
     }
 
-    // Check opacity
+    // Additional checks for comprehensive analysis
     const opacity = parseFloat(style.opacity);
     if (opacity < 0.01) {
       return `opacity: ${opacity}`;
-    }
-
-    // Check dimensions
-    if (rect.width <= 0 || rect.height <= 0) {
-      return `zero dimensions: ${Math.round(rect.width)}x${Math.round(
-        rect.height
-      )}`;
-    }
-
-    // Check position (off-screen)
-    if (
-      rect.right < 0 ||
-      rect.bottom < 0 ||
-      rect.left > window.innerWidth ||
-      rect.top > window.innerHeight
-    ) {
-      return "off-screen";
     }
 
     // Check transform

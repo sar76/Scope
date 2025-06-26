@@ -242,3 +242,30 @@ export function cacheSelector(element) {
   element._scopeCachedSelector = selector;
   return selector;
 }
+
+/**
+ * Extract a rich signature for deduplication from an element
+ * @param {Element} el - DOM element
+ * @returns {Object} Signature object
+ */
+export function extractElementSignature(el) {
+  if (!el) return null;
+  const text =
+    el.innerText
+      ?.trim()
+      .toLowerCase()
+      .replace(/[^\\w\s]/g, "") || "";
+  const href = el.getAttribute("href") || el.getAttribute("data-action") || "";
+  let icon = "";
+  const img = el.querySelector("img");
+  if (img && img.src) {
+    icon = img.src;
+  } else {
+    const bg = window.getComputedStyle(el).backgroundImage;
+    if (bg && bg !== "none") icon = bg;
+  }
+  const parentPath = el.parentElement
+    ? computeUniqueCssPath(el.parentElement)
+    : "";
+  return { el, text, href, icon, parentPath };
+}

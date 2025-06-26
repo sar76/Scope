@@ -21,6 +21,7 @@ export const THRESHOLDS = {
   REPEATED_CONTAINERS: 3,
   VIEWPORT_MARGIN: 50,
   MIN_SURVIVORS_PER_STAGE: 3,
+  MIN_AREA: 100, // Minimum bounding box area in square pixels
 };
 
 // Element Collections
