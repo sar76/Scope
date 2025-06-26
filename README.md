@@ -2,14 +2,14 @@
 
 A comprehensive platform for analyzing and extracting UI components from websites using both DOM analysis and computer vision.
 
-## 🎯 What is Scope?
+## What is Scope?
 
 Scope is a research platform that combines two powerful approaches to understand website UI components:
 
 1. **DOMExtraction** - A Chrome extension that analyzes the DOM structure
 2. **ComputerVision** - A Python pipeline that uses AI to detect UI elements visually
 
-## 🏗️ Architecture
+## Architecture
 
 ```
 Scope/
@@ -25,7 +25,7 @@ Scope/
 └── README.md              # This overview
 ```
 
-## 🚀 Key Features
+## Key Features
 
 ### DOMExtraction Extension
 
@@ -43,7 +43,7 @@ Scope/
 - **Visualization**: Color-coded bounding boxes with annotations
 - **High Accuracy**: 80-95% detection accuracy across component types
 
-## 🛠️ Quick Start
+## Quick Start
 
 ### DOMExtraction Extension
 
@@ -65,7 +65,7 @@ python phase2_detection.py
 python phase3_visualization.py
 ```
 
-## 📊 Use Cases
+## Use Cases
 
 - **UI/UX Research**: Analyze design patterns across websites
 - **Component Libraries**: Extract reusable UI components
@@ -73,7 +73,7 @@ python phase3_visualization.py
 - **Design System Analysis**: Compare component usage patterns
 - **Quality Assurance**: Validate UI component detection accuracy
 
-## 🔗 Integration
+## Integration
 
 The two components can work together:
 
@@ -82,19 +82,19 @@ The two components can work together:
 - Compare DOM structure with visual detection
 - Generate comprehensive UI component reports
 
-## 📚 Documentation
+## Documentation
 
 - **[DOMExtraction README](DOMExtraction/README.md)** - Complete extension documentation
 - **[ComputerVision README](ComputerVision/README.md)** - Detailed pipeline documentation
 
-## 🤝 Contributing
+## Contributing
 
 1. Fork the repository
 2. Create a feature branch
 3. Make your changes
 4. Submit a pull request
 
-## 📄 License
+## License
 
 MIT License - see LICENSE file for details
 

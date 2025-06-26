@@ -2,27 +2,27 @@
 
 A powerful Chrome extension for extracting, analyzing, and capturing UI elements from web pages. This extension provides comprehensive DOM analysis, advanced filtering, real-time highlighting, and screenshot capture capabilities.
 
-## 🚀 Features
+## Features
 
 ### Core Functionality
 
-- **🔍 DOM Element Collection**: Automatically collects interactive UI elements from web pages
-- **🎯 Advanced Filtering**: Multi-stage filtering pipeline with visibility, spatial, and semantic analysis
-- **✨ Real-time Highlighting**: Visual feedback with scroll-resistant highlighting
-- **🤖 LLM Integration**: AI-powered element analysis and classification using OpenAI
-- **📸 Screenshot Capture**: Capture and download screenshots of filtered elements
-- **💾 Storage Management**: Persistent storage of collected data and analysis results
-- **🛡️ Error Handling**: Comprehensive error handling and logging system
+- **DOM Element Collection**: Automatically collects interactive UI elements from web pages
+- **Advanced Filtering**: Multi-stage filtering pipeline with visibility, spatial, and semantic analysis
+- **Real-time Highlighting**: Visual feedback with scroll-resistant highlighting
+- **LLM Integration**: AI-powered element analysis and classification using OpenAI
+- **Screenshot Capture**: Capture and download screenshots of filtered elements
+- **Storage Management**: Persistent storage of collected data and analysis results
+- **Error Handling**: Comprehensive error handling and logging system
 
 ### Advanced Features
 
-- **🎨 Debug Overlay**: Visual debugging interface showing filtering steps
-- **📊 Progress Tracking**: Real-time progress updates during collection and filtering
-- **🔧 Configurable Settings**: Customizable filtering thresholds and behavior
-- **📁 Organized Downloads**: Screenshots organized by site and element type
-- **⚡ Performance Optimized**: Efficient DOM traversal and processing
+- **Debug Overlay**: Visual debugging interface showing filtering steps
+- **Progress Tracking**: Real-time progress updates during collection and filtering
+- **Configurable Settings**: Customizable filtering thresholds and behavior
+- **Organized Downloads**: Screenshots organized by site and element type
+- **Performance Optimized**: Efficient DOM traversal and processing
 
-## 📁 Project Structure
+## Project Structure
 
 ```
 DOMExtraction/
@@ -74,7 +74,7 @@ DOMExtraction/
 └── README.md                   # This file
 ```
 
-## 🛠️ Installation & Setup
+## Installation & Setup
 
 ### Prerequisites
 
@@ -114,7 +114,7 @@ DOMExtraction/
    - Click "Load unpacked"
    - Select the `build` directory
 
-## 🎯 Usage Guide
+## Usage Guide
 
 ### Basic Workflow
 
@@ -154,7 +154,7 @@ DOMExtraction/
 - Modify visibility and spatial criteria
 - Customize element selection criteria
 
-## 🔧 Configuration
+## Configuration
 
 ### Environment Variables
 
@@ -186,7 +186,7 @@ BATCH_SIZE: 10,                   // Elements processed per batch
 MAX_ELEMENTS: 1000,               // Maximum elements to collect
 ```
 
-## 🔍 Filtering Pipeline
+## Filtering Pipeline
 
 The extension uses a sophisticated multi-stage filtering pipeline:
 
@@ -221,7 +221,7 @@ The extension uses a sophisticated multi-stage filtering pipeline:
 - **Fuzzy Matching**: Identifies near-duplicate elements
 - **Context Analysis**: Considers surrounding context for uniqueness
 
-## 📸 Screenshot System
+## Screenshot System
 
 ### Features
 
@@ -248,7 +248,7 @@ webuicomponents/
     └── 3_input_300x35_Email.png
 ```
 
-## 🏗️ Architecture
+## Architecture
 
 ### Background Script (Service Worker)
 
@@ -271,7 +271,7 @@ webuicomponents/
 - **Results View**: Display collected elements and analysis results
 - **Configuration**: Access to settings and preferences
 
-## 🔧 Development
+## Development
 
 ### Available Scripts
 
@@ -297,7 +297,7 @@ npm run lint           # Run linting (if configured)
 - **Background**: Chrome Extensions → Service Worker
 - **Logs**: Look for `[Scope]` prefixed messages
 
-## 🚨 Error Handling
+## Error Handling
 
 ### Error Types
 
@@ -313,7 +313,7 @@ npm run lint           # Run linting (if configured)
 - **User Feedback**: Clear error messages and recovery suggestions
 - **Logging**: Comprehensive error logging for debugging
 
-## 🔒 Permissions
+## Permissions
 
 The extension requires the following permissions:
 
@@ -322,7 +322,7 @@ The extension requires the following permissions:
 - **tabs**: Screenshot capture functionality
 - **downloads**: Save screenshot files to user's computer
 
-## 🤝 Contributing
+## Contributing
 
 1. Fork the repository
 2. Create a feature branch (`git checkout -b feature/amazing-feature`)
@@ -340,11 +340,11 @@ The extension requires the following permissions:
 - Test on multiple websites and browsers
 - Update documentation for new features
 
-## 📄 License
+## License
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
 
-## 🆘 Support
+## Support
 
 ### Common Issues
 
@@ -360,7 +360,7 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 - Create an issue with detailed reproduction steps
 - Include browser version and target website information
 
-## 🔄 Version History
+## Version History
 
 ### v1.0.0
 

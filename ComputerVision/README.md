@@ -2,7 +2,7 @@
 
 A sophisticated 3-phase computer vision pipeline for detecting, analyzing, and visualizing UI components from website screenshots using OpenAI's GPT-4 Vision API and advanced image processing techniques.
 
-## 🎯 Overview
+## Overview
 
 This ComputerVision module provides a complete pipeline for:
 
@@ -12,7 +12,7 @@ This ComputerVision module provides a complete pipeline for:
 
 The pipeline is designed for high accuracy, performance, and reliability in detecting UI elements across various website designs and layouts.
 
-## 🏗️ Architecture
+## Architecture
 
 ### 3-Phase Pipeline
 
@@ -38,7 +38,7 @@ ComputerVision/
 └── README.md                   # This documentation
 ```
 
-## 🚀 Features
+## Features
 
 ### Phase 1: Screenshot Capture
 
@@ -73,7 +73,7 @@ ComputerVision/
 - **Comprehensive Logging**: Detailed progress and error tracking
 - **Environment Management**: Centralized configuration with validation
 
-## 🛠️ Installation & Setup
+## Installation & Setup
 
 ### Prerequisites
 
@@ -128,7 +128,7 @@ LOG_LEVEL=INFO
 python config.py
 ```
 
-## 📖 Usage Guide
+## Usage Guide
 
 ### Quick Start
 
@@ -211,7 +211,7 @@ python phase3_visualization.py --screenshot "screenshot.png" --json "analysis.js
 - Coordinate validation and correction
 - High-performance rendering
 
-## 🔧 Configuration
+## Configuration
 
 ### Environment Variables
 
@@ -247,7 +247,7 @@ OPENAI_RETRY_ATTEMPTS = 3
 OPENAI_BACKOFF_FACTOR = 2.0
 ```
 
-## 📊 Output Formats
+## Output Formats
 
 ### Phase 1 Output
 
@@ -299,7 +299,7 @@ OPENAI_BACKOFF_FACTOR = 2.0
 - **Features**: Color-coded bounding boxes, text annotations
 - **Colors**: Different colors for each component type
 
-## 🔍 Component Detection Accuracy
+## Component Detection Accuracy
 
 ### Supported Component Types
 
@@ -328,7 +328,7 @@ The system can detect 13+ different UI component types with high accuracy:
 - **Layout Complexity**: Simple layouts have higher accuracy
 - **Text Content**: Text-rich components are more accurately classified
 
-## 🚨 Error Handling
+## Error Handling
 
 ### Common Issues & Solutions
 
@@ -360,7 +360,7 @@ export LOG_LEVEL=DEBUG
 python phase1_screenshot.py --url "https://example.com" --verbose
 ```
 
-## 🔬 Advanced Features
+## Advanced Features
 
 ### Refinement Algorithms
 
@@ -384,7 +384,7 @@ python phase1_screenshot.py --url "https://example.com" --verbose
 - **Caching**: API response caching for repeated analysis
 - **Batch Processing**: Process multiple images efficiently
 
-## 📈 Performance Metrics
+## Performance Metrics
 
 ### Typical Performance
 
@@ -399,7 +399,7 @@ python phase1_screenshot.py --url "https://example.com" --verbose
 - **CPU**: Moderate usage during processing
 - **Network**: API calls to OpenAI (minimal for screenshots)
 
-## 🤝 Integration
+## Integration
 
 ### With DOMExtraction Extension
 
@@ -424,7 +424,7 @@ components = analyzer.extract_components("screenshot.png")
 visualize_bounding_boxes("screenshot.png", "analysis.json", "output.png")
 ```
 
-## 🔄 Development
+## Development
 
 ### Adding New Component Types
 
@@ -444,11 +444,11 @@ visualize_bounding_boxes("screenshot.png", "analysis.json", "output.png")
 2. Adjust API parameters (temperature, max_tokens)
 3. Implement custom caching strategies
 
-## 📄 License
+## License
 
 This project is licensed under the MIT License - see the [LICENSE](../LICENSE) file for details.
 
-## 🆘 Support
+## Support
 
 ### Getting Help
 
