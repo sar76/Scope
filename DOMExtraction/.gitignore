@@ -17,6 +17,11 @@ dist/
 .env.test.local
 .env.production.local
 
+# API Keys and sensitive configuration
+../ComputerVision/config.py
+config.py
+*config.py
+
 # IDE and editor files
 .vscode/
 .idea/
