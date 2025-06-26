@@ -1370,6 +1370,7 @@ export class FilterPipeline {
 let debugStepData = new Map(); // stepNumber -> { stepName, reason, functionName, elements: [] }
 let debugOverlay = null;
 let highlightOverlay = null; // New: overlay for highlighting elements on hover
+let debugHighlightManager = null; // New: dedicated highlight manager for debug overlay
 
 // Debug overlay for filtering steps - more efficient approach
 function showFilterDebugOverlay(
@@ -1439,7 +1440,7 @@ function showFilterDebugOverlay(
     highlightOverlay = document.createElement("div");
     highlightOverlay.id = "scope-highlight-overlay";
     highlightOverlay.style.cssText = `
-      position: fixed;
+      position: absolute;
       top: 0;
       left: 0;
       width: 100%;
@@ -1448,6 +1449,11 @@ function showFilterDebugOverlay(
       z-index: 999998;
     `;
     document.body.appendChild(highlightOverlay);
+  }
+
+  // Initialize debug highlight manager
+  if (!debugHighlightManager) {
+    debugHighlightManager = new DebugHighlightManager();
   }
 
   // Clear and rebuild the overlay content
@@ -1471,6 +1477,10 @@ function showFilterDebugOverlay(
     if (highlightOverlay) {
       highlightOverlay.remove();
       highlightOverlay = null;
+    }
+    if (debugHighlightManager) {
+      debugHighlightManager.cleanup();
+      debugHighlightManager = null;
     }
   };
   debugOverlay.appendChild(closeBtn);
@@ -1563,63 +1573,13 @@ function showFilterDebugOverlay(
         // Add hover highlighting functionality
         li.addEventListener("mouseenter", () => {
           li.style.backgroundColor = "#555";
-          highlightElementOnPage(el);
+          debugHighlightManager.highlightElement(el);
         });
 
         li.addEventListener("mouseleave", () => {
           li.style.backgroundColor = "#333";
-          clearHighlight();
+          debugHighlightManager.removeHighlight();
         });
-
-        // Add hover tooltip for specific removal reason if available
-        if (
-          stepData.removalReasons &&
-          stepData.removalReasons.has(el.selector)
-        ) {
-          const specificReason = stepData.removalReasons.get(el.selector);
-
-          // Add visual indicator that tooltip is available
-          li.style.borderLeft = "3px solid #ffc107";
-          li.title = "Hover for removal reason";
-
-          // Create tooltip
-          const tooltip = document.createElement("div");
-          tooltip.style.cssText = `
-            position: absolute;
-            bottom: 100%;
-            left: 0;
-            background: #000;
-            color: #fff;
-            padding: 8px 12px;
-            border-radius: 6px;
-            font-size: 11px;
-            max-width: 300px;
-            white-space: normal;
-            word-wrap: break-word;
-            z-index: 1000000;
-            opacity: 0;
-            visibility: hidden;
-            transition: opacity 0.2s, visibility 0.2s;
-            box-shadow: 0 4px 12px rgba(0,0,0,0.3);
-            border: 1px solid #444;
-            pointer-events: none;
-          `;
-
-          // Set tooltip content
-          tooltip.textContent = `Removal reason: ${specificReason}`;
-          li.appendChild(tooltip);
-
-          // Show tooltip on hover
-          li.addEventListener("mouseenter", () => {
-            tooltip.style.opacity = "1";
-            tooltip.style.visibility = "visible";
-          });
-
-          li.addEventListener("mouseleave", () => {
-            tooltip.style.opacity = "0";
-            tooltip.style.visibility = "hidden";
-          });
-        }
 
         list.appendChild(li);
       });
@@ -1630,206 +1590,377 @@ function showFilterDebugOverlay(
     debugOverlay.appendChild(section);
   });
 
-  // Add summary
-  const totalRemoved = Array.from(debugStepData.values()).reduce(
-    (sum, step) => sum + step.elements.length,
-    0
-  );
+  // Add summary section
   const summary = document.createElement("div");
   summary.style.cssText =
-    "margin-top: 15px; padding-top: 10px; border-top: 1px solid #444; color: #aaa; font-size: 12px; text-align: center;";
-  summary.textContent = `Total: ${totalRemoved} elements removed across ${
-    debugStepData.size
-  } steps | ${new Date().toLocaleTimeString()}`;
+    "margin-top: 20px; padding: 12px; background: #333; border-radius: 8px; font-size: 12px;";
+  summary.innerHTML = `
+    <strong>Summary:</strong><br>
+    • Total steps: ${sortedSteps.length}<br>
+    • Total elements removed: ${sortedSteps.reduce(
+      (sum, [_, data]) => sum + data.elements.length,
+      0
+    )}<br>
+    • Debug overlay will highlight elements on hover
+  `;
   debugOverlay.appendChild(summary);
 }
 
-// Function to highlight an element on the page
-function highlightElementOnPage(elementData) {
-  if (!highlightOverlay) {
-    console.warn("Highlight overlay not available");
-    return;
+// Debug Highlight Manager for robust highlighting in debug overlay
+class DebugHighlightManager {
+  constructor() {
+    this.currentHighlight = null;
+    this.targetElement = null;
+    this.scrollListener = null;
+    this.resizeListener = null;
+    this.mutationObserver = null;
+    this.updateTimeout = null;
+    this.isUpdating = false;
   }
 
-  // Clear any existing highlights
-  clearHighlight();
+  highlightElement(elementData) {
+    this.removeHighlight();
 
-  let targetElement = null;
+    let targetElement = null;
 
-  // Try to find the element using the selector
-  if (elementData.selector && elementData.selector !== "unknown") {
-    try {
-      targetElement = document.querySelector(elementData.selector);
-      if (!targetElement) {
-        console.warn("Element not found with selector:", elementData.selector);
+    // Try to find the element using the selector
+    if (elementData.selector && elementData.selector !== "unknown") {
+      try {
+        targetElement = document.querySelector(elementData.selector);
+        if (!targetElement) {
+          console.warn(
+            "Element not found with selector:",
+            elementData.selector
+          );
+        }
+      } catch (error) {
+        console.warn(
+          "Could not find element with selector:",
+          elementData.selector,
+          error
+        );
       }
-    } catch (error) {
-      console.warn(
-        "Could not find element with selector:",
-        elementData.selector,
-        error
-      );
     }
-  }
 
-  // Fallback to stored element reference
-  if (!targetElement && elementData.element) {
-    targetElement = elementData.element;
-  }
+    // Fallback to stored element reference
+    if (!targetElement && elementData.element) {
+      targetElement = elementData.element;
+    }
 
-  // If we still don't have a target element, try to find it by other means
-  if (!targetElement) {
-    console.warn("No target element found for highlighting:", elementData);
-    return;
-  }
+    if (!targetElement) {
+      console.warn("No target element found for highlighting:", elementData);
+      return;
+    }
 
-  // Check if element has getBoundingClientRect
-  if (!targetElement.getBoundingClientRect) {
-    console.warn(
-      "Element does not have getBoundingClientRect method:",
-      targetElement
-    );
-    return;
-  }
+    this.targetElement = targetElement;
 
-  try {
-    // Always scroll the element into view (centered, smooth)
+    // Scroll element into view
     targetElement.scrollIntoView({
       behavior: "smooth",
       block: "center",
       inline: "center",
     });
 
-    // Wait a bit for scroll to complete, then get the rect
     setTimeout(() => {
-      try {
-        const rect = targetElement.getBoundingClientRect();
+      this.createHighlight(elementData);
+      this.setupEventListeners();
+      this.startObserving();
+    }, 100);
+  }
 
-        // Debug logging
-        console.log("Highlighting element:", {
-          tagName: targetElement.tagName,
-          selector: elementData.selector,
-          rect: {
-            top: rect.top,
-            left: rect.left,
-            width: rect.width,
-            height: rect.height,
-            area: rect.width * rect.height,
-          },
-          scrollY: window.scrollY,
-          scrollX: window.scrollX,
-        });
+  createHighlight(elementData) {
+    if (!this.targetElement) return;
 
-        // Check if element has valid dimensions
-        if (rect.width <= 0 || rect.height <= 0) {
-          console.warn("Element has zero or negative dimensions:", {
-            width: rect.width,
-            height: rect.height,
-            element: targetElement,
-          });
-          return;
+    const rect = this.targetElement.getBoundingClientRect();
+
+    if (rect.width <= 0 || rect.height <= 0) {
+      console.warn("Element has zero or negative dimensions:", {
+        width: rect.width,
+        height: rect.height,
+        element: this.targetElement,
+      });
+      return;
+    }
+
+    // Create highlight box
+    const highlightBox = document.createElement("div");
+    highlightBox.style.cssText = `
+      position: absolute;
+      top: ${rect.top + window.scrollY}px;
+      left: ${rect.left + window.scrollX}px;
+      width: ${rect.width}px;
+      height: ${rect.height}px;
+      border: 3px solid #ff4444;
+      background: rgba(255, 68, 68, 0.1);
+      border-radius: 4px;
+      pointer-events: none;
+      z-index: 999997;
+      box-shadow: 0 0 10px rgba(255, 68, 68, 0.5);
+      animation: scopeDebugPulse 1s infinite;
+    `;
+
+    // Add pulse animation if not already present
+    if (!document.querySelector("#scope-debug-pulse-animation")) {
+      const style = document.createElement("style");
+      style.id = "scope-debug-pulse-animation";
+      style.textContent = `
+        @keyframes scopeDebugPulse {
+          0% { opacity: 0.7; }
+          50% { opacity: 1; }
+          100% { opacity: 0.7; }
         }
+      `;
+      document.head.appendChild(style);
+    }
 
-        // Check if element is in viewport
-        if (
-          rect.bottom < 0 ||
-          rect.top > window.innerHeight ||
-          rect.right < 0 ||
-          rect.left > window.innerWidth
-        ) {
-          console.warn("Element is outside viewport:", {
-            rect,
-            viewport: { width: window.innerWidth, height: window.innerHeight },
-          });
-        }
+    // Add label with element info
+    const label = document.createElement("div");
+    const labelTop = Math.max(0, rect.top + window.scrollY - 30);
 
-        // Create highlight box with improved positioning
-        const highlightBox = document.createElement("div");
-        const top = rect.top + window.scrollY;
-        const left = rect.left + window.scrollX;
+    label.style.cssText = `
+      position: absolute;
+      top: ${labelTop}px;
+      left: ${rect.left + window.scrollX}px;
+      background: #ff4444;
+      color: white;
+      padding: 4px 8px;
+      border-radius: 4px;
+      font-size: 12px;
+      font-weight: bold;
+      white-space: nowrap;
+      pointer-events: none;
+      z-index: 999997;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+      max-width: 300px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    `;
 
-        highlightBox.style.cssText = `
-          position: absolute;
-          top: ${top}px;
-          left: ${left}px;
-          width: ${rect.width}px;
-          height: ${rect.height}px;
-          border: 3px solid #ff4444;
-          background: rgba(255, 68, 68, 0.1);
-          border-radius: 4px;
-          pointer-events: none;
-          z-index: 999997;
-          box-shadow: 0 0 10px rgba(255, 68, 68, 0.5);
-          animation: pulse 1s infinite;
-        `;
+    const tagName =
+      elementData.tagName ||
+      this.targetElement.tagName.toLowerCase() ||
+      "unknown";
+    const size = `${Math.round(rect.width)}x${Math.round(rect.height)}`;
+    const text = elementData.text || this.targetElement.innerText?.trim() || "";
+    const displayText = text.length > 20 ? text.substring(0, 20) + "..." : text;
 
-        // Add pulse animation if not already present
-        if (!document.querySelector("#scope-pulse-animation")) {
-          const style = document.createElement("style");
-          style.id = "scope-pulse-animation";
-          style.textContent = `
-            @keyframes pulse {
-              0% { opacity: 0.7; }
-              50% { opacity: 1; }
-              100% { opacity: 0.7; }
-            }
-          `;
-          document.head.appendChild(style);
-        }
+    label.textContent = `${tagName} (${size}) - ${displayText}`;
+    label.title = `${tagName} (${size}) - ${text}`;
 
-        highlightOverlay.appendChild(highlightBox);
+    if (highlightOverlay) {
+      highlightOverlay.appendChild(highlightBox);
+      highlightOverlay.appendChild(label);
+      this.currentHighlight = { box: highlightBox, label: label };
+    }
+  }
 
-        // Add label with element info
-        const label = document.createElement("div");
-        const labelTop = Math.max(0, top - 30);
+  setupEventListeners() {
+    this.removeEventListeners();
 
-        label.style.cssText = `
-          position: absolute;
-          top: ${labelTop}px;
-          left: ${left}px;
-          background: #ff4444;
-          color: white;
-          padding: 4px 8px;
-          border-radius: 4px;
-          font-size: 12px;
-          font-weight: bold;
-          white-space: nowrap;
-          pointer-events: none;
-          z-index: 999997;
-          box-shadow: 0 2px 8px rgba(0,0,0,0.3);
-          max-width: 300px;
-          overflow: hidden;
-          text-overflow: ellipsis;
-        `;
+    this.scrollListener = () => {
+      this.debouncedUpdate();
+    };
 
-        const tagName =
-          elementData.tagName ||
-          targetElement.tagName.toLowerCase() ||
-          "unknown";
-        const size = `${Math.round(rect.width)}x${Math.round(rect.height)}`;
-        const text = elementData.text || targetElement.innerText?.trim() || "";
-        const displayText =
-          text.length > 20 ? text.substring(0, 20) + "..." : text;
+    this.resizeListener = () => {
+      this.debouncedUpdate();
+    };
 
-        label.textContent = `${tagName} (${size}) - ${displayText}`;
-        label.title = `${tagName} (${size}) - ${text}`;
+    window.addEventListener("scroll", this.scrollListener, { passive: true });
+    window.addEventListener("resize", this.resizeListener, { passive: true });
 
-        highlightOverlay.appendChild(label);
+    // Add scrollable container listeners
+    this.addScrollableContainerListeners();
+  }
 
-        console.log("Highlight created successfully for:", tagName, size);
-      } catch (error) {
-        console.error("Error creating highlight:", error);
+  addScrollableContainerListeners() {
+    if (!this.targetElement) return;
+
+    const scrollableContainers = this.findScrollableContainers(
+      this.targetElement
+    );
+
+    scrollableContainers.forEach((container) => {
+      container.addEventListener("scroll", this.scrollListener, {
+        passive: true,
+      });
+    });
+  }
+
+  findScrollableContainers(element) {
+    const containers = [];
+    let current = element.parentElement;
+
+    while (current && current !== document.body) {
+      const style = window.getComputedStyle(current);
+      const overflow = style.overflow + style.overflowX + style.overflowY;
+
+      if (overflow.includes("scroll") || overflow.includes("auto")) {
+        containers.push(current);
       }
-    }, 100); // Small delay to ensure scroll completes
-  } catch (error) {
-    console.error("Error highlighting element:", error);
+
+      current = current.parentElement;
+    }
+
+    return containers;
+  }
+
+  removeEventListeners() {
+    if (this.scrollListener) {
+      window.removeEventListener("scroll", this.scrollListener);
+      this.scrollListener = null;
+    }
+
+    if (this.resizeListener) {
+      window.removeEventListener("resize", this.resizeListener);
+      this.resizeListener = null;
+    }
+
+    if (this.targetElement) {
+      const scrollableContainers = this.findScrollableContainers(
+        this.targetElement
+      );
+      scrollableContainers.forEach((container) => {
+        container.removeEventListener("scroll", this.scrollListener);
+      });
+    }
+  }
+
+  debouncedUpdate() {
+    if (this.updateTimeout) {
+      clearTimeout(this.updateTimeout);
+    }
+
+    this.updateTimeout = setTimeout(() => {
+      this.updateHighlightPosition();
+    }, 16);
+  }
+
+  updateHighlightPosition() {
+    if (!this.currentHighlight || !this.targetElement || this.isUpdating) {
+      return;
+    }
+
+    this.isUpdating = true;
+
+    try {
+      if (!document.contains(this.targetElement)) {
+        console.warn("Target element no longer exists, removing highlight");
+        this.removeHighlight();
+        return;
+      }
+
+      const rect = this.targetElement.getBoundingClientRect();
+
+      // Update highlight position
+      this.currentHighlight.box.style.top = `${rect.top + window.scrollY}px`;
+      this.currentHighlight.box.style.left = `${rect.left + window.scrollX}px`;
+      this.currentHighlight.box.style.width = `${rect.width}px`;
+      this.currentHighlight.box.style.height = `${rect.height}px`;
+
+      // Update label position
+      const labelTop = Math.max(0, rect.top + window.scrollY - 30);
+      this.currentHighlight.label.style.top = `${labelTop}px`;
+      this.currentHighlight.label.style.left = `${
+        rect.left + window.scrollX
+      }px`;
+
+      // Update opacity based on visibility
+      if (rect.width <= 0 || rect.height <= 0) {
+        this.currentHighlight.box.style.opacity = "0.1";
+        this.currentHighlight.label.style.opacity = "0.1";
+      } else {
+        this.currentHighlight.box.style.opacity = "1";
+        this.currentHighlight.label.style.opacity = "1";
+      }
+    } catch (error) {
+      console.error("Error updating debug highlight position:", error);
+    } finally {
+      this.isUpdating = false;
+    }
+  }
+
+  startObserving() {
+    if (this.mutationObserver) {
+      this.mutationObserver.disconnect();
+    }
+
+    this.mutationObserver = new MutationObserver((mutations) => {
+      let shouldUpdate = false;
+
+      mutations.forEach((mutation) => {
+        if (mutation.type === "childList") {
+          if (mutation.removedNodes) {
+            for (let node of mutation.removedNodes) {
+              if (node.contains && node.contains(this.targetElement)) {
+                shouldUpdate = true;
+                break;
+              }
+            }
+          }
+        } else if (mutation.type === "attributes") {
+          if (
+            mutation.target === this.targetElement ||
+            mutation.target.contains(this.targetElement)
+          ) {
+            const attr = mutation.attributeName;
+            if (["class", "style", "hidden"].includes(attr)) {
+              shouldUpdate = true;
+            }
+          }
+        }
+      });
+
+      if (shouldUpdate) {
+        this.debouncedUpdate();
+      }
+    });
+
+    this.mutationObserver.observe(document.body, {
+      childList: true,
+      subtree: true,
+      attributes: true,
+      attributeFilter: ["class", "style", "hidden"],
+    });
+  }
+
+  stopObserving() {
+    if (this.mutationObserver) {
+      this.mutationObserver.disconnect();
+      this.mutationObserver = null;
+    }
+  }
+
+  removeHighlight() {
+    this.removeEventListeners();
+    this.stopObserving();
+
+    if (this.updateTimeout) {
+      clearTimeout(this.updateTimeout);
+      this.updateTimeout = null;
+    }
+
+    if (this.currentHighlight) {
+      if (this.currentHighlight.box) {
+        this.currentHighlight.box.remove();
+      }
+      if (this.currentHighlight.label) {
+        this.currentHighlight.label.remove();
+      }
+      this.currentHighlight = null;
+    }
+
+    this.targetElement = null;
+  }
+
+  cleanup() {
+    this.removeHighlight();
   }
 }
 
-// Function to clear highlight
+// Function to clear highlight (legacy function for compatibility)
 function clearHighlight() {
-  if (highlightOverlay) {
-    highlightOverlay.innerHTML = "";
+  if (debugHighlightManager) {
+    debugHighlightManager.removeHighlight();
   }
 }
 
@@ -1844,12 +1975,14 @@ function clearDebugData() {
     highlightOverlay.remove();
     highlightOverlay = null;
   }
+  if (debugHighlightManager) {
+    debugHighlightManager.cleanup();
+    debugHighlightManager = null;
+  }
 }
 
 // Make debug functions available globally
 window.clearDebugData = clearDebugData;
-window.showFilterDebugOverlay = showFilterDebugOverlay;
-window.debugStepData = debugStepData;
 
 // Helper function to create rich element objects for debug overlay
 function createRichElementObject(el) {

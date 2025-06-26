@@ -14,6 +14,7 @@ import { ElementCollector } from "./utils/collector.js";
 import { FilterPipeline } from "./filter/pipeline.js";
 import { HighlightManager } from "./utils/highlight.js";
 import { ObserverManager } from "./utils/observer.js";
+import { ScreenshotService } from "./services/screenshot.js";
 
 // Global state
 let isCollecting = false;
@@ -21,7 +22,10 @@ let collector = null;
 let filterPipeline = null;
 let highlightManager = null;
 let observerManager = null;
+let screenshotService = null;
 let lastCollectedElements = [];
+let lastFilteredElements = [];
+let selectorToData = {};
 
 /**
  * Create a visible notification element
@@ -130,6 +134,7 @@ function initialize() {
     filterPipeline = new FilterPipeline();
     highlightManager = new HighlightManager();
     observerManager = new ObserverManager();
+    screenshotService = new ScreenshotService();
 
     // Set up message listeners
     chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
@@ -210,6 +215,30 @@ function initialize() {
         console.log("Handling TOGGLE_DEBUG_OVERLAY action");
         handleToggleDebugOverlay();
         sendResponse({ success: true });
+        return true;
+      }
+
+      if (message.action === MESSAGE_ACTIONS.CAPTURE_SCREENSHOTS) {
+        console.log("Handling CAPTURE_SCREENSHOTS action");
+        createNotification("📸 Starting screenshot capture...", "info", 0);
+
+        // Use async IIFE to handle the async function properly
+        (async () => {
+          try {
+            await handleCaptureScreenshots(sendResponse);
+          } catch (error) {
+            console.error("Error in handleCaptureScreenshots:", error);
+            errorLogger.log(error, "error", {
+              context: "handleCaptureScreenshots",
+            });
+            createNotification(
+              `❌ Screenshot capture failed: ${error.message}`,
+              "error",
+              5000
+            );
+            sendResponse(createErrorResponse(error));
+          }
+        })();
         return true;
       }
 
@@ -803,23 +832,23 @@ const handleRunInspect = withErrorHandling(async (sendResponse) => {
     console.log(`Collected ${elements.length} interactive elements`);
 
     // Map to data objects with selector, tag, text, etc.
-    const collected = elements
-      .filter(isElementInteractive) // Final filter for meaningful UI components
-      .map((el) => {
-        const uniqueSelector = computeUniqueCssPath(el);
-        const rect = el.getBoundingClientRect().toJSON();
-        const text = el.innerText?.trim() || "";
-        const role = el.getAttribute("role") || null;
-        const ariaLabel = el.getAttribute("aria-label") || null;
-        return {
-          selector: uniqueSelector,
-          tagName: el.tagName.toLowerCase(),
-          text,
-          boundingRect: rect,
-          role,
-          ariaLabel,
-        };
-      });
+    const collected = elements.filter(isElementInteractive).map((el) => {
+      const uniqueSelector = computeUniqueCssPath(el);
+      const rect = el.getBoundingClientRect().toJSON();
+      const text = el.innerText?.trim() || "";
+      const role = el.getAttribute("role") || null;
+      const ariaLabel = el.getAttribute("aria-label") || null;
+      const dataObj = {
+        selector: uniqueSelector,
+        tagName: el.tagName.toLowerCase(),
+        text,
+        boundingRect: rect,
+        role,
+        ariaLabel,
+      };
+      selectorToData[uniqueSelector] = dataObj;
+      return dataObj;
+    });
     lastCollectedElements = collected;
 
     // Reply to popup immediately with success
@@ -1075,87 +1104,146 @@ function handleToggleDebugOverlay() {
 }
 
 /**
- * Handle comprehensive filtering
- * @param {Array} selectors - Selectors to filter
+ * Handle comprehensive filtering with progress updates
+ * @param {Array} selectors - Array of selectors to filter
  * @param {Function} sendResponse - Response callback
  */
-const handleComprehensiveFilter = withErrorHandling(
-  async (selectors, sendResponse) => {
-    // Clear any existing debug data at the start
-    if (typeof clearDebugData === "function") {
-      clearDebugData();
-    }
-
-    createNotification(
-      `🔍 Starting filtering with ${selectors.length} selectors`,
-      "info",
-      2000
+async function handleComprehensiveFilter(selectors, sendResponse) {
+  try {
+    console.log(
+      "Starting comprehensive filtering with",
+      selectors.length,
+      "selectors"
     );
 
-    // Pass selectors directly to the filter pipeline
-    try {
-      createNotification(
-        "🔄 Converting selectors to elements...",
-        "info",
-        2000
-      );
-      const filtered = await filterPipeline.applyComprehensiveFiltering(
-        selectors
-      );
+    // Convert selectors to elements
+    const elements = filterPipeline.convertSelectorsToElements(selectors);
+    console.log("Converted to", elements.length, "elements");
 
-      createNotification(
-        `✅ Filtering completed. Found ${filtered.length} elements`,
-        "success",
-        3000
-      );
+    // Apply comprehensive filtering
+    const filteredElements = await filterPipeline.applyComprehensiveFiltering(
+      selectors
+    );
+    console.log(
+      "Comprehensive filtering completed,",
+      filteredElements.length,
+      "elements remaining"
+    );
 
-      // Update overlay with filtered results
-      createNotification("🔄 Updating results overlay...", "info", 2000);
-      lastCollectedElements = filtered.map((el) => {
-        // If the filter pipeline returns DOM elements, map to data objects
-        if (el instanceof Element) {
-          const uniqueSelector = computeUniqueCssPath(el);
-          const rect = el.getBoundingClientRect().toJSON();
-          const text = el.innerText?.trim() || "";
-          const role = el.getAttribute("role") || null;
-          const ariaLabel = el.getAttribute("aria-label") || null;
-          return {
-            selector: uniqueSelector,
-            tagName: el.tagName.toLowerCase(),
-            text,
-            boundingRect: rect,
-            role,
-            ariaLabel,
-          };
-        }
-        // If already a data object, return as is
-        return el;
-      });
+    // Store filtered elements for screenshot capture
+    lastFilteredElements = filteredElements;
 
-      createNotification(
-        `📊 Updated lastCollectedElements with ${lastCollectedElements.length} elements`,
-        "info",
-        2000
-      );
+    // Map filtered DOM elements back to their data objects
+    const filteredDataObjects = filteredElements.map((el) => {
+      const selector = computeUniqueCssPath(el);
+      return selectorToData[selector] || { tagName: el.tagName, selector };
+    });
 
-      // Show the results overlay
-      showResultsOverlay(lastCollectedElements);
+    // Show results overlay with data objects
+    showResultsOverlay(filteredDataObjects);
 
-      createNotification(
-        "✅ Results overlay should now be visible",
-        "success",
-        2000
-      );
+    // Send success response with data objects
+    sendResponse({
+      success: true,
+      message: `Comprehensive filtering completed. ${filteredDataObjects.length} elements remaining.`,
+      filteredCount: filteredDataObjects.length,
+      totalCount: selectors.length,
+      filteredElements: filteredDataObjects,
+    });
 
-      sendResponse({ success: true, filtered });
-    } catch (error) {
-      createNotification(`❌ Filtering error: ${error.message}`, "error", 5000);
-      console.error("Filtering error:", error);
-      sendResponse({ success: false, error: error.message });
+    createNotification(
+      `✅ Filtering completed: ${filteredDataObjects.length}/${selectors.length} elements remaining`,
+      "success",
+      3000
+    );
+  } catch (error) {
+    console.error("Error in comprehensive filtering:", error);
+    errorLogger.log(error, "error", { context: "comprehensiveFilter" });
+    throw error;
+  }
+}
+
+/**
+ * Handle screenshot capture of filtered elements
+ * @param {Function} sendResponse - Response callback
+ */
+async function handleCaptureScreenshots(sendResponse) {
+  try {
+    if (!screenshotService) {
+      throw new Error("Screenshot service not initialized");
     }
-  },
-  "handleComprehensiveFilter"
-);
+
+    if (lastFilteredElements.length === 0) {
+      throw new Error(
+        "No filtered elements available. Please run filtering first."
+      );
+    }
+
+    console.log(
+      "Starting screenshot capture for",
+      lastFilteredElements.length,
+      "elements"
+    );
+
+    // Convert DOM elements to data objects for screenshot service
+    const elementsForScreenshots = lastFilteredElements.map((el, index) => {
+      const selector = computeUniqueCssPath(el);
+      const dataObject = selectorToData[selector] || {
+        tagName: el.tagName.toLowerCase(),
+        selector: selector,
+        text: el.innerText?.trim() || "",
+        element: el,
+      };
+      console.log(`[Scope] Element ${index + 1}:`, {
+        tagName: dataObject.tagName,
+        selector: dataObject.selector,
+        text: dataObject.text?.substring(0, 50),
+      });
+      return dataObject;
+    });
+
+    console.log(
+      "Converted elements for screenshots:",
+      elementsForScreenshots.length
+    );
+
+    // Progress callback for notifications
+    const progressCallback = (current, total, message) => {
+      createNotification(`📸 ${message}`, "info", 0);
+    };
+
+    // Get the current page URL for folder naming
+    const pageUrl = window.location.href;
+    console.log("Using page URL for folder naming:", pageUrl);
+
+    // Capture screenshots
+    const results = await screenshotService.captureElementScreenshots(
+      elementsForScreenshots,
+      progressCallback,
+      pageUrl
+    );
+
+    console.log("Screenshot capture completed:", results);
+
+    // Send success response with download data
+    sendResponse({
+      success: true,
+      message: `Screenshot capture completed. ${results.capturedCount}/${results.totalElements} captured.`,
+      results: results,
+      downloadData: results.downloadData,
+    });
+
+    createNotification(
+      `✅ Screenshots captured: ${results.capturedCount}/${results.totalElements}`,
+      "success",
+      3000
+    );
+  } catch (error) {
+    console.error("Error in screenshot capture:", error);
+    errorLogger.log(error, "error", { context: "captureScreenshots" });
+    throw error;
+  }
+}
 
 // Initialize when content script loads
 initialize();

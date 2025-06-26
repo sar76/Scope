@@ -8,7 +8,7 @@
  */
 export class MessagingService {
   constructor() {
-    this.timeout = 10000; // 10 second timeout
+    this.timeout = 30000; // 30 second timeout (increased from 10)
   }
 
   /**

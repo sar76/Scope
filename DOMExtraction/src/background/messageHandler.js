@@ -33,6 +33,14 @@ export function handleMessage(message, sender, sendResponse) {
       handleProgressUpdate(message.data, sender.tab?.id);
       return false;
 
+    case MESSAGE_ACTIONS.CAPTURE_VISIBLE_TAB:
+      console.log(
+        "[Scope] CAPTURE_VISIBLE_TAB handler called. Sender:",
+        sender
+      );
+      handleCaptureVisibleTab(sendResponse, sender);
+      return true;
+
     default:
       console.warn("Unknown message action:", message.action);
       sendResponse({ success: false, error: "Unknown action" });
@@ -72,4 +80,50 @@ function handleProgressUpdate(progressData, tabId) {
     .catch(() => {
       // Popup might not be open, ignore error
     });
+}
+
+/**
+ * Handle CAPTURE_VISIBLE_TAB message
+ * @param {Function} sendResponse - Response callback
+ */
+function handleCaptureVisibleTab(sendResponse, sender) {
+  try {
+    const windowId =
+      sender && sender.tab && sender.tab.windowId ? sender.tab.windowId : null;
+    console.log(
+      "[Scope] handleCaptureVisibleTab: calling chrome.tabs.captureVisibleTab, windowId:",
+      windowId
+    );
+    chrome.tabs.captureVisibleTab(
+      windowId,
+      { format: "png", quality: 100 },
+      (dataUrl) => {
+        if (chrome.runtime.lastError) {
+          console.error(
+            "[Scope] Error capturing visible tab:",
+            chrome.runtime.lastError
+          );
+          sendResponse({
+            success: false,
+            error: chrome.runtime.lastError.message,
+          });
+        } else if (!dataUrl) {
+          console.error("[Scope] captureVisibleTab returned no dataUrl");
+          sendResponse({
+            success: false,
+            error: "No screenshot data returned",
+          });
+        } else {
+          console.log(
+            "[Scope] captureVisibleTab success, dataUrl length:",
+            dataUrl.length
+          );
+          sendResponse({ success: true, dataUrl });
+        }
+      }
+    );
+  } catch (error) {
+    console.error("[Scope] Exception in handleCaptureVisibleTab:", error);
+    sendResponse({ success: false, error: error.message });
+  }
 }

@@ -4,6 +4,8 @@
  */
 
 import { MESSAGE_ACTIONS } from "@shared/constants.js";
+import { getDownloadPath, getFormattedFilename } from "@shared/config.js";
+import JSZip from "jszip";
 
 /**
  * Popup controller class for managing UI interactions
@@ -20,6 +22,7 @@ export class PopupController {
     this.refreshBtn = null;
     this.filterBtn = null;
     this.toggleDebugBtn = null;
+    this.downloadComponentsBtn = null;
   }
 
   /**
@@ -40,6 +43,9 @@ export class PopupController {
     this.refreshBtn = document.getElementById("refreshBtn");
     this.filterBtn = document.getElementById("filterBtn");
     this.toggleDebugBtn = document.getElementById("toggleDebugBtn");
+    this.downloadComponentsBtn = document.getElementById(
+      "downloadComponentsBtn"
+    );
   }
 
   /**
@@ -63,6 +69,11 @@ export class PopupController {
     // Toggle Debug: show/hide debug overlay
     this.toggleDebugBtn.addEventListener("click", () =>
       this.handleToggleDebug()
+    );
+
+    // Download Components: capture and download screenshots
+    this.downloadComponentsBtn.addEventListener("click", () =>
+      this.handleDownloadComponents()
     );
 
     // Storage change listener
@@ -216,6 +227,229 @@ export class PopupController {
   }
 
   /**
+   * Handle Download Components button click
+   */
+  async handleDownloadComponents() {
+    if (this.isProcessing) return;
+    this.setLoading(true);
+
+    try {
+      const tabs = await chrome.tabs.query({
+        active: true,
+        currentWindow: true,
+      });
+      if (!tabs[0]) {
+        this.setLoading(false);
+        this.showError("No active tab found");
+        return;
+      }
+
+      const isContentScriptAvailable =
+        await this.messagingService.isContentScriptAvailable();
+      if (!isContentScriptAvailable) {
+        this.setLoading(false);
+        this.showError(
+          "Content script not available on this page. Please try on a regular web page."
+        );
+        return;
+      }
+
+      // Set longer timeout for screenshot operations
+      this.messagingService.setTimeout(60000); // 60 seconds for screenshot capture
+
+      console.log("[Scope] Popup: Starting screenshot capture process...");
+
+      // Send CAPTURE_SCREENSHOTS message
+      const response = await this.messagingService.sendMessageToTab(
+        tabs[0].id,
+        {
+          action: "CAPTURE_SCREENSHOTS",
+        }
+      );
+
+      console.log("[Scope] Popup: Received screenshot response:", response);
+
+      if (response && response.success) {
+        // Download the screenshots as a zip file
+        if (response.downloadData) {
+          console.log("[Scope] Popup: Starting download with downloadData...");
+          await this.downloadScreenshotsZip(response.downloadData);
+        } else if (response.results && response.results.downloadData) {
+          console.log(
+            "[Scope] Popup: Starting download with results.downloadData..."
+          );
+          await this.downloadScreenshotsZip(response.results.downloadData);
+        } else {
+          console.error(
+            "[Scope] Popup: No download data found in response:",
+            response
+          );
+          this.showError("No screenshots to download.");
+        }
+
+        this.showSuccess(
+          `Screenshots captured: ${response.results?.capturedCount || 0}/${
+            response.results?.totalElements || 0
+          }`
+        );
+      } else {
+        console.error("[Scope] Popup: Screenshot capture failed:", response);
+        this.showError(
+          "Screenshot capture failed: " + (response?.error || "Unknown error")
+        );
+      }
+    } catch (error) {
+      console.error("[Scope] Popup: Error in handleDownloadComponents:", error);
+      this.showError("Error downloading components: " + error.message);
+    } finally {
+      // Reset timeout to default
+      this.messagingService.setTimeout(30000);
+      this.setLoading(false);
+    }
+  }
+
+  /**
+   * Download screenshots as a zip file
+   * @param {Object} downloadData - Download data object
+   */
+  async downloadScreenshotsZip(downloadData) {
+    try {
+      console.log("[Scope] Popup: Starting downloadScreenshotsZip with data:", {
+        folderName: downloadData.folderName,
+        screenshotCount: downloadData.screenshots.length,
+      });
+
+      // Create a zip file using JSZip
+      console.log("[Scope] Popup: Loading JSZip...");
+      const JSZip = await this.loadJSZip();
+      console.log("[Scope] Popup: JSZip loaded successfully");
+
+      const zip = new JSZip();
+      console.log("[Scope] Popup: Created new JSZip instance");
+
+      // Create folder structure
+      const folder = zip.folder(downloadData.folderName);
+      console.log("[Scope] Popup: Created folder:", downloadData.folderName);
+
+      // Add each screenshot to the zip
+      console.log("[Scope] Popup: Adding screenshots to zip...");
+      downloadData.screenshots.forEach((screenshot, index) => {
+        console.log(
+          `[Scope] Popup: Adding screenshot ${index + 1}/${
+            downloadData.screenshots.length
+          }:`,
+          screenshot.filename
+        );
+        // Convert data URL to blob
+        const base64Data = screenshot.dataUrl.split(",")[1];
+        folder.file(screenshot.filename, base64Data, { base64: true });
+      });
+
+      // Generate zip file
+      console.log("[Scope] Popup: Generating zip file...");
+      const zipBlob = await zip.generateAsync({ type: "blob" });
+      console.log(
+        "[Scope] Popup: Zip blob created, size:",
+        zipBlob.size,
+        "bytes"
+      );
+
+      // Use Chrome downloads API
+      console.log("[Scope] Popup: Using Chrome downloads API...");
+      const url = URL.createObjectURL(zipBlob);
+      console.log("[Scope] Popup: Created blob URL:", url);
+
+      const filename = `${downloadData.folderName}_screenshots.zip`;
+      console.log("[Scope] Popup: Download filename:", filename);
+
+      // Use Chrome downloads API to save to specific folder
+      console.log("[Scope] Popup: Initiating Chrome download...");
+
+      const downloadPromise = new Promise((resolve, reject) => {
+        chrome.downloads.download(
+          {
+            url: url,
+            filename: filename,
+            saveAs: false,
+          },
+          (downloadId) => {
+            if (chrome.runtime.lastError) {
+              console.error(
+                "[Scope] Popup: Chrome download error:",
+                chrome.runtime.lastError
+              );
+              reject(new Error(chrome.runtime.lastError.message));
+            } else {
+              console.log(
+                "[Scope] Popup: Chrome download started with ID:",
+                downloadId
+              );
+              resolve(downloadId);
+            }
+          }
+        );
+      });
+
+      // Add timeout protection for the download
+      const downloadTimeout = 30000; // 30 seconds
+      const downloadId = await Promise.race([
+        downloadPromise,
+        new Promise((_, reject) =>
+          setTimeout(
+            () => reject(new Error("Download timeout")),
+            downloadTimeout
+          )
+        ),
+      ]);
+
+      console.log(
+        "[Scope] Popup: Chrome download completed successfully with ID:",
+        downloadId
+      );
+
+      // Clean up the blob URL
+      URL.revokeObjectURL(url);
+      console.log("[Scope] Popup: Blob URL revoked");
+
+      console.log(
+        `[Scope] Popup: Successfully initiated download for ${downloadData.screenshots.length} screenshots`
+      );
+      return true;
+    } catch (error) {
+      console.error("[Scope] Popup: Error downloading screenshots:", error);
+      console.error("[Scope] Popup: Error stack:", error.stack);
+      throw error;
+    }
+  }
+
+  /**
+   * Load JSZip library
+   * @returns {Promise<JSZip>} Promise that resolves with JSZip instance
+   */
+  async loadJSZip() {
+    // JSZip should be available from the bundle
+    if (typeof JSZip !== "undefined") {
+      return JSZip;
+    }
+
+    // If not available, try to load it dynamically
+    return new Promise((resolve, reject) => {
+      const script = document.createElement("script");
+      script.src =
+        "https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js";
+      script.onload = () => {
+        if (typeof JSZip !== "undefined") {
+          resolve(JSZip);
+        } else {
+          reject(new Error("JSZip failed to load"));
+        }
+      };
+      script.onerror = () => reject(new Error("Failed to load JSZip"));
+      document.head.appendChild(script);
+    });
+  }
+
+  /**
    * Show filtering progress bar with step updates
    */
   showFilteringProgress() {
@@ -299,22 +533,60 @@ export class PopupController {
   }
 
   /**
-   * Set loading state
+   * Set loading state for UI elements
    * @param {boolean} isLoading - Whether to show loading state
    */
   setLoading(isLoading) {
     this.isProcessing = isLoading;
 
+    // Update button states
     this.runInspectBtn.disabled = isLoading;
     this.stopInspectBtn.disabled = !isLoading;
     this.refreshBtn.disabled = isLoading;
+    this.filterBtn.disabled = isLoading;
+    this.toggleDebugBtn.disabled = isLoading;
+    this.downloadComponentsBtn.disabled = isLoading;
 
+    // Update button text
     if (isLoading) {
-      this.runInspectBtn.innerHTML =
-        '<span class="loading"></span>Processing...';
+      this.runInspectBtn.textContent = "Processing...";
     } else {
-      this.runInspectBtn.innerHTML = "Run Inspect";
+      this.runInspectBtn.textContent = "Run Inspect";
     }
+  }
+
+  /**
+   * Show success message
+   * @param {string} message - Success message to display
+   */
+  showSuccess(message) {
+    // Create a temporary success notification
+    const notification = document.createElement("div");
+    notification.style.cssText = `
+      position: fixed;
+      top: 20px;
+      right: 20px;
+      background: #28a745;
+      color: white;
+      padding: 12px 20px;
+      border-radius: 8px;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      font-size: 14px;
+      font-weight: 500;
+      z-index: 999999;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+      max-width: 300px;
+      word-wrap: break-word;
+    `;
+    notification.textContent = message;
+    document.body.appendChild(notification);
+
+    // Remove after 3 seconds
+    setTimeout(() => {
+      if (notification.parentNode) {
+        notification.remove();
+      }
+    }, 3000);
   }
 
   /**
@@ -376,6 +648,121 @@ export class PopupController {
     if (message.action === MESSAGE_ACTIONS.PROGRESS_UPDATE) {
       const { step, message: progressMessage } = message.data;
       this.updateFilteringProgress(step, progressMessage);
+
+      // Enable download button when filtering is completed (step 24)
+      if (step >= 24) {
+        this.downloadComponentsBtn.disabled = false;
+        this.hideFilteringProgress();
+      }
     }
+  }
+
+  /**
+   * Render the list of UI elements in the popup
+   * @param {Array} uiData - Array of UI element objects
+   */
+  renderUIList(uiData) {
+    const listContainerId = "scopeResultsList";
+    let listContainer = document.getElementById(listContainerId);
+    if (!listContainer) {
+      // Create the container if it doesn't exist
+      listContainer = document.createElement("div");
+      listContainer.id = listContainerId;
+      listContainer.style.marginTop = "16px";
+      // Insert after the header or at the top
+      const header = document.querySelector(".scope-header") || document.body;
+      header.parentNode.insertBefore(listContainer, header.nextSibling);
+    }
+    // Clear previous content
+    listContainer.innerHTML = "";
+
+    if (!uiData || uiData.length === 0) {
+      listContainer.textContent = "No UI elements found.";
+      return;
+    }
+
+    // Render each UI element in debugger-style summary
+    uiData.forEach((el, idx) => {
+      const item = document.createElement("div");
+      item.className = "scope-ui-list-item";
+      item.style.cssText = `
+        padding: 8px 16px;
+        border-bottom: 1px solid #f0f0f0;
+        cursor: pointer;
+        font-size: 14px;
+        background: #fff;
+        transition: background 0.2s;
+        line-height: 1.5;
+      `;
+      // Build summary line
+      const tagName = el.tagName || el.tag || "ELEMENT";
+      let size = "";
+      if (el.boundingRect && el.boundingRect.width && el.boundingRect.height) {
+        size = ` (${Math.round(el.boundingRect.width)}x${Math.round(
+          el.boundingRect.height
+        )})`;
+      }
+      const role = el.role ? ` [role=\"${el.role}\"]` : "";
+      let selector = el.selector || el.xpath || "";
+      if (selector.length > 40) selector = selector.substring(0, 40) + "...";
+      selector = selector ? ` - ${selector}` : "";
+      let text = el.text || "";
+      if (text.length > 30) text = text.substring(0, 30) + "...";
+      text = text ? ` - \"${text}\"` : "";
+      let ariaLabel = el.ariaLabel || "";
+      if (ariaLabel && ariaLabel !== el.text) {
+        if (ariaLabel.length > 20)
+          ariaLabel = ariaLabel.substring(0, 20) + "...";
+        ariaLabel = ` [aria-label=\"${ariaLabel}\"]`;
+      } else {
+        ariaLabel = "";
+      }
+      item.textContent = `${
+        idx + 1
+      }. ${tagName}${size}${role}${selector}${text}${ariaLabel}`;
+      item.title = el.selector || el.xpath || "";
+      // Highlight on hover/click
+      item.addEventListener("mouseenter", () => {
+        this.highlightElement(el);
+      });
+      item.addEventListener("mouseleave", () => {
+        this.unhighlightElement(el);
+      });
+      item.addEventListener("click", () => {
+        this.highlightElement(el, true);
+      });
+      listContainer.appendChild(item);
+    });
+  }
+
+  /**
+   * Highlight a UI element in the page
+   * @param {Object} el - UI element object
+   * @param {boolean} scrollIntoView - Whether to scroll to the element
+   */
+  highlightElement(el, scrollIntoView = false) {
+    // Send a message to the content script to highlight the element
+    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+      if (!tabs[0]) return;
+      chrome.tabs.sendMessage(tabs[0].id, {
+        action: "HIGHLIGHT_ELEMENT",
+        element: el,
+        scrollIntoView,
+      });
+    });
+  }
+
+  /**
+   * Remove highlight from a UI element
+   * @param {Object} el - UI element object
+   */
+  unhighlightElement(el) {
+    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+      if (!tabs[0]) return;
+      chrome.tabs.sendMessage(tabs[0].id, {
+        action: "UNHIGHLIGHT_ELEMENT",
+        element: el,
+      });
+    });
   }
 }

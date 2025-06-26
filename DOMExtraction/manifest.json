@@ -5,7 +5,10 @@
   "description": "Extract and analyze UI elements from web pages",
   "permissions": [
     "activeTab",
-    "storage"
+    "storage",
+    "scripting",
+    "downloads",
+    "tabs"
   ],
   "host_permissions": [
     "<all_urls>"
